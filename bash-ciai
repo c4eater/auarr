@@ -1,8 +1,19 @@
 #!/bin/bash
 
 
+
+
+sanity_test()
+# Checks system requirements (utils, locales), etc.
+{
+	return 0
+	# todo: LC_COLLATE test
+}
+
+
+
 check_mixed_locales()
-# Returns "solid" when the input string has no words with both Latin and Cyrillic chars, "mixed" otherwise. Used in detectenc().
+# Returns 0 when the input string has no words with both Latin and Cyrillic chars, 1 otherwise. Used in detectenc().
 {
     if [ ! "${1}" ]; then return $EMPTY_ARG; fi
     
@@ -14,11 +25,12 @@ check_mixed_locales()
     for i in $_words; do
         _cyr_letters_count="$(echo "${i}" | grep -o -e '[А-Яа-я]' 2>/dev/null | sed -n -e '$=')"
         if [ -z "${_cyr_letters_count}" ]; then _cyr_letters_count=0; fi
-        if [ ${_cyr_letters_count} -gt 0 ] && [ ${_cyr_letters_count} -lt ${#i} ]; then echo "mixed"; return; fi
+        if [ ${_cyr_letters_count} -gt 0 ] && [ ${_cyr_letters_count} -lt ${#i} ]; then return 1; fi
     done
 
-	echo "solid"
+	return 0
 }
+
 
 
 check_inverted_case()
@@ -27,7 +39,6 @@ check_inverted_case()
     if [ ! "${1}" ]; then return $EMPTY_ARG; fi
     echo "${1}" | egrep -o -m 1 -e '\<[а-яa-z][А-ЯA-Z]{2,}\>' --silent 2>/dev/null
 }
-
 
 
 
@@ -62,6 +73,7 @@ resolve()
 }
 
 
+
 detectenc()
 # Returns the argument encoding, focusing on cyrillic codepages (CP1251, CP866, KOI8-R). Returns "???" when failed.
 # Calls enca, then an additional hand-made script in case of enca fail.
@@ -92,10 +104,8 @@ detectenc()
 #           Maybe it's ISO-8859-1
             input="$(echo "${1}" | iconv -f ISO-8859-1 -t UTF-8 | sed -re 's/\r$//')"
             checked="$(getprintable "${input}")"
-			result=$(check_mixed_locales "${input}")
-			echo "Test: $result"
 
-            if [ ${#checked} -eq ${#input} ] && [ $(check_mixed_locales "${input}") == "0" ]; then
+            if [ ${#checked} -eq ${#input} ] && check_mixed_locales "${input}"; then
                 ans="ISO-8859-1"
             fi
         fi
@@ -106,7 +116,7 @@ detectenc()
             input="$(echo "${1}" | iconv -f CP1251 -t UTF-8 | sed -r -e 's/\r$//')"
             checked="$(getprintable "${input}")"
             
-            if [ ${#checked} -eq ${#input} ] && [ $(check_mixed_locales "${input}") -eq "0" ] && [ $(check_inverted_case "${input}") -eq "0" ]; then
+            if [ ${#checked} -eq ${#input} ] && check_mixed_locales "${input}" && check_inverted_case "${input}"; then
                 ans="CP1251"
             fi
         fi
@@ -161,6 +171,7 @@ getprintable()
 }
 
 
+
 getprintable-nonstrict()
 # Same, but allows Latin chars with diacritics
 {
@@ -169,6 +180,7 @@ getprintable-nonstrict()
     ans="$(echo "${1}" | sed -e 's/$/_NEWLINE/g' |  grep -o -e '[-!\"#№{}$%&\()*+,.:;<=>?@_\`\/~ЁёA-Za-zА-Яа-я0-9[:blank:]]*' | tr -d "\n" | sed -e 's/_NEWLINE/\n/g')"
     echo "${ans}"
 }
+
 
 
 fixchars()
