@@ -1,14 +1,12 @@
 #!/usr/bin/perl
 
 use strict;
+use Cwd "cwd";
 use warnings;
 use File::pushd;
 use Getopt::Long;
 use Term::ANSIColor;
-
-
-
-my $outdir = "/mnt/storage/music-sorted";
+#use Data::Dumper;
 
 
 
@@ -63,29 +61,94 @@ sub help {
 # underneath and, optionally, audio files.
 
 
-sub traverse {
-    my $dir = shift || $_;
+
+sub fetch_scans {
+    my ($files, $dirs) = @_;
+
+    return 0 if @$dirs || !@$files;
+
+    foreach (@$files) {
+        return 0 unless /\.jpg$/ || /\.bmp$/ || /\.png$/;
+    }
+
+    return 1;
+}
+
+
+
+sub fetch_album {
+    my ($files, $dirs) = @_;
+
+    return 0 if !@$files or @$dirs > 1;
+
+    return 0 if ((@$dirs == 1) && !funcall(\&fetch_scans, @$dirs[0]));
+
+    my (@mp3, @cue, @flac, @ape, @txt, @graphical);
+
+    my %classifier = ( "mp3"  => \@mp3,
+                       "cue"  => \@cue,
+                       "flac" => \@flac,
+                       "ape"  => \@ape,
+                       "log"  => \@txt,
+                       "txt"  => \@txt,
+                       "jpg"  => \@graphical,
+                       "png"  => \@graphical,
+                       "bmp"  => \@graphical);
+
+    foreach my $file (@$files) {
+        return 0 unless (my $ext) = $file =~ /\.([a-z0-9]+)$/;
+        return 0 unless my $class = $classifier{$ext};
+        push @$class, $file;
+    }
+
+    if (@mp3 && !@cue && !@flac && !@ape) {
+        printf "Found MP3 album in %s\n", cwd();
+        return 1;
+    } elsif (!@mp3 && @flac==1 && @cue==1 && !@ape) {
+        printf "Found FLAC+CUE album in %s\n", cwd();
+        return 1;
+    } elsif (!@mp3 && @ape==1 && @cue==1 && !@flac) {
+        printf "Found APE+CUE album in %s\n", cwd();
+        return 1;
+    } elsif (!@mp3 && (@flac>1) && !@ape) {
+        printf "Found FLAC album in %s\n", cwd();
+        return 1;
+    } else {
+        printf "Found album in unknown format in %s!\n", cwd();
+        return 1;
+    }
+}
+
+
+
+sub collect_albums {
+    my ($files, $dirs) = @_;
+
+    foreach my $dir (@$dirs) {
+        funcall (\&fetch_album, $dir) or funcall (\&collect_albums, $dir);
+    }
+
+    return 0;
+}
+
+
+
+sub funcall {
+    my $fn = shift or die "Error: \"fn\" not specified";
+    my $dir = shift || $_ or die "Error: \"dir\" not specified";
 
     opendir(my $dh, $dir) or die "Error: can't \"opendir\" " . $dir;
     my $newpath = pushd $dir;
+    my (@files, @dirs);
 
     while (readdir $dh) {
-        # Iterate through the directory contents.
         next if /^\.\.?$/;
-
-        my (@files, @dirs);
-
         -f ? push @files, $_ : push @dirs, $_;
-
-        # TODO: Process files and dirs, detect cuesheets, etc.
-
-        foreach (@dirs) {
-            printf "descend into %s\n", $_;
-            traverse();
-        }
     };
 
     closedir $dh;
+
+    return &$fn(\@files, \@dirs);
 }
 
 
@@ -108,6 +171,4 @@ if (defined $opt_help) {
     exit;
 }
 
-#mkdir "$outdir" unless -e "$outdir";
-
-traverse $ARGV[0];
+funcall \&collect_albums, $ARGV[0];
