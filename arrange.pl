@@ -1,9 +1,10 @@
 #!/usr/bin/perl
 
 use strict;
-use Cwd "cwd";
 use warnings;
+use Cwd "cwd";
 use File::pushd;
+use File::Spec "abs2rel";
 use Getopt::Long;
 use Term::ANSIColor;
 #use Data::Dumper;
@@ -20,6 +21,25 @@ sub help {
           "\t\tRemove source directories in case of successful processing.\n";
 }
 
+
+sub _error {
+    my $msg = shift or return;
+
+    print STDERR colored(['red'], $msg);
+}
+
+
+
+sub _warn {
+    my $msg = shift or return;
+
+    print STDERR colored(['yellow'], $msg);
+}
+
+
+sub rcwd {
+    return File::Spec->abs2rel(cwd(), $ARGV[0]);
+}
 
 
 # A directory is considered a "scans directory" if it meets _all_ of the
@@ -96,25 +116,42 @@ sub fetch_album {
                        "bmp"  => \@graphical);
 
     foreach my $file (@$files) {
-        return 0 unless (my $ext) = $file =~ /\.([a-z0-9]+)$/;
-        return 0 unless my $class = $classifier{$ext};
+        (my $ext) = $file =~ /\.([a-z0-9]+)$/;
+
+        unless ($ext) {
+            _warn sprintf("File \"%s\" in: \"%s\" has empty extension, giving up scan\n",
+                         $file, rcwd);
+
+            return 1;
+        }
+
+        my $class = $classifier{$ext};
+
+        unless ($class) {
+            _warn sprintf("File \"%s\" in: \"%s\" has unknown extension, giving up scan\n",
+                         $file, rcwd);
+
+            return 1;
+        }
+
         push @$class, $file;
     }
 
     if (@mp3 && !@cue && !@flac && !@ape) {
-        printf "Found MP3 album in %s\n", cwd();
+        printf "Found MP3 album in: %s\n", rcwd;
         return 1;
     } elsif (!@mp3 && @flac==1 && @cue==1 && !@ape) {
-        printf "Found FLAC+CUE album in %s\n", cwd();
+        printf "Found FLAC+CUE album in: %s\n", rcwd;
         return 1;
     } elsif (!@mp3 && @ape==1 && @cue==1 && !@flac) {
-        printf "Found APE+CUE album in %s\n", cwd();
+        printf "Found APE+CUE album in: %s\n", rcwd;
         return 1;
     } elsif (!@mp3 && (@flac>1) && !@ape) {
-        printf "Found FLAC album in %s\n", cwd();
+        printf "Found FLAC album in: %s\n", rcwd;
         return 1;
     } else {
-        printf "Found album in unknown format in %s!\n", cwd();
+        _warn sprintf("Cannot guess the album format in: %s\n",
+                      rcwd);
         return 1;
     }
 }
