@@ -108,7 +108,7 @@ sub fetch_scans {
     return 0 if @$dirs || !@$files;
 
     foreach (@$files) {
-        return 0 unless /\.jpg$/ || /\.bmp$/ || /\.png$/;
+        return 0 unless /\.jpg$/i || /\.bmp$/i || /\.png$/i;
     }
 
     return 1;
@@ -136,20 +136,18 @@ sub fetch_album {
                        "bmp"  => \@graphical);
 
     foreach my $file (@$files) {
-        (my $ext) = $file =~ /\.([a-z0-9]+)$/;
+        (my $ext) = $file =~ /\.([a-z0-9]+)$/i;
 
         unless ($ext) {
-            _warn sprintf("File \"%s\" in: \"%s\" has empty extension, giving up scan\n",
-                         $file, rcwd);
+            _warn sprintf("NO_EXT          %s/%s\n", rcwd, $file);
 
             return 1;
         }
 
-        my $class = $classifier{$ext};
+        my $class = $classifier{lc($ext)};
 
         unless ($class) {
-            _warn sprintf("File \"%s\" in: \"%s\" has unknown extension, giving up scan\n",
-                         $file, rcwd);
+            _warn sprintf("BAD_EXT         %s/%s\n", rcwd, $file);
 
             return 1;
         }
@@ -158,20 +156,19 @@ sub fetch_album {
     }
 
     if (@mp3 && !@cue && !@flac && !@ape) {
-        printf "Found MP3 album in: %s\n", rcwd;
+        _warn sprintf("MP3             %s\n", rcwd);
         return 1;
     } elsif (!@mp3 && @flac==1 && @cue==1 && !@ape) {
-        printf "Found FLAC+CUE album in: %s\n", rcwd;
+        _warn sprintf("FLAC+CUE        %s\n", rcwd);
         return 1;
     } elsif (!@mp3 && @ape==1 && @cue==1 && !@flac) {
-        printf "Found APE+CUE album in: %s\n", rcwd;
+        _warn sprintf("APE+CUE         %s\n", rcwd);
         return 1;
     } elsif (!@mp3 && (@flac>1) && !@ape) {
-        printf "Found FLAC album in: %s\n", rcwd;
+        printf "FLAC            %s\n", rcwd;
         return 1;
     } else {
-        _warn sprintf("Cannot guess the album format in: %s\n",
-                      rcwd);
+        _warn sprintf("FAILDETECT      %s\n", rcwd);
         return 1;
     }
 }
