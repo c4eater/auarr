@@ -29,7 +29,6 @@ sub _error {
 }
 
 
-
 sub _warn {
     my $msg = shift or return;
 
@@ -39,6 +38,27 @@ sub _warn {
 
 sub rcwd {
     return File::Spec->abs2rel(cwd(), $ARGV[0]);
+}
+
+
+sub vorbis_get {
+    my $file = shift or die "Error: \"file\" not specified";
+
+    my $command = `metaflac --list --block-type=VORBIS_COMMENT \"$file\"`;
+
+    open(my $fh, '<', \$command);
+
+    my %vorbis_tags = ();
+
+    while (<$fh>) {
+        chomp;
+        (my $key, my $value) = $_ =~ /comment\[[[:alnum:]]+\]: (.*)=(.*)/;
+        $vorbis_tags{$key} = $value if $key && $value;
+    }
+
+    close $fh;
+
+    return \%vorbis_tags;
 }
 
 
