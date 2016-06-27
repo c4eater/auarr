@@ -11,6 +11,7 @@ use Term::ANSIColor;
 
 
 
+# Print out the help.
 sub help {
     print "\nUsage: ", colored(['bold'], "arrange.pl"),
           " [-hr]\n\n";
@@ -22,6 +23,8 @@ sub help {
 }
 
 
+
+# Print out an error message highlighted by red.
 sub _error {
     my $msg = shift or return;
 
@@ -29,6 +32,8 @@ sub _error {
 }
 
 
+
+# Print out a warning message highlighted by yellow.
 sub _warn {
     my $msg = shift or return;
 
@@ -36,11 +41,16 @@ sub _warn {
 }
 
 
+
+# Accept a directory as an argument, and return the current working
+# directory in a relative form, treating the argument as a basedir.
 sub rcwd {
     return File::Spec->abs2rel(cwd(), $ARGV[0]);
 }
 
 
+
+# Given a FLAC file name, return a hash storing this file's Vorbis tags.
 sub vorbis_get {
     my $file = shift or die "Error: \"file\" not specified";
 
@@ -102,13 +112,14 @@ sub vorbis_get {
 
 
 
+# Check if a directory is a scans directory.
 sub fetch_scans {
     my ($files, $dirs) = @_;
 
     return 0 if @$dirs || !@$files;
 
     foreach (@$files) {
-        return 0 unless /\.jpg$/i || /\.bmp$/i || /\.png$/i;
+        return 0 unless /\.jpg$/i || /\.bmp$/i || /\.png$/i || /\.tif$/i;
     }
 
     return 1;
@@ -116,12 +127,35 @@ sub fetch_scans {
 
 
 
-sub fetch_album {
+# Collect albums from a directory in a recursive way.
+#
+# If an album is successfully fetched and copied, the function returns 1.
+# (This also results in removing the source dir in case --remove-source
+# has been activated.)
+#
+# Otherwise, the function returns 0.
+sub fetch_albums {
     my ($files, $dirs) = @_;
 
-    return 0 if !@$files or @$dirs > 1;
+    foreach my $i (0..@$dirs-1) {
+        if (funcall(\&fetch_scans, ${$dirs}[$i])) {
+            my $scans_dir = ${$dirs}[$i];
+            delete ${$dirs}[$i];
+            last;
+        }
+    }
 
-    return 0 if ((@$dirs == 1) && !funcall(\&fetch_scans, @$dirs[0]));
+    if (@$files and @$dirs) {
+        _error sprintf("MIXED_CONTENTS  %s\n", rcwd);
+        return 0;
+    }
+
+    if (@$dirs) {
+        map({ funcall(\&fetch_albums, $_) } @$dirs);
+        return 0;
+    }
+
+    return 0 if !@$files;
 
     my (@mp3, @cue, @flac, @ape, @txt, @graphical);
 
@@ -132,8 +166,9 @@ sub fetch_album {
                        "log"  => \@txt,
                        "txt"  => \@txt,
                        "jpg"  => \@graphical,
+                       "bmp"  => \@graphical,
                        "png"  => \@graphical,
-                       "bmp"  => \@graphical);
+                       "tif"  => \@graphical);
 
     foreach my $file (@$files) {
         (my $ext) = $file =~ /\.([a-z0-9]+)$/i;
@@ -165,7 +200,16 @@ sub fetch_album {
         _warn sprintf("APE+CUE         %s\n", rcwd);
         return 1;
     } elsif (!@mp3 && (@flac>1) && !@ape) {
-        printf "FLAC            %s\n", rcwd;
+        printf("FLAC            %s\n", rcwd);
+        printf("=== DEBUG ===\n%s\n",
+               join("\n\n", map({ my $flacdata = vorbis_get($_);
+                                  join("\n",
+                                       map({ sprintf("%s = %s",
+                                                     $_, $flacdata->{$_}) }
+                                           keys($flacdata))) }
+                                @flac)));
+        print "=== DEBUG END ===\n\n";
+
         return 1;
     } else {
         _warn sprintf("FAILDETECT      %s\n", rcwd);
@@ -175,21 +219,10 @@ sub fetch_album {
 
 
 
-sub collect_albums {
-    my ($files, $dirs) = @_;
-
-    foreach my $dir (@$dirs) {
-        funcall (\&fetch_album, $dir) or funcall (\&collect_albums, $dir);
-    }
-
-    return 0;
-}
-
-
-
+# Apply the given subroutine to files and subdirectories of the given directory.
 sub funcall {
     my $fn = shift or die "Error: \"fn\" not specified";
-    my $dir = shift || $_ or die "Error: \"dir\" not specified";
+    my $dir = shift or die "Error: \"dir\" not specified";
 
     opendir(my $dh, $dir) or die "Error: can't \"opendir\" " . $dir;
     my $newpath = pushd $dir;
@@ -197,7 +230,7 @@ sub funcall {
 
     while (readdir $dh) {
         next if /^\.\.?$/;
-        -f ? push @files, $_ : push @dirs, $_;
+        -f $_ ? push @files, $_ : push @dirs, $_;
     };
 
     closedir $dh;
@@ -217,7 +250,8 @@ if ($#ARGV) {
 
 our($opt_help, $opt_remove_source);
 
-GetOptions('help' => \$opt_help, 'remove-source' => \$opt_remove_source)
+GetOptions('help'          => \$opt_help,
+           'remove-source' => \$opt_remove_source)
     or die "Wrong command line options specified";
 
 if (defined $opt_help) {
@@ -225,4 +259,4 @@ if (defined $opt_help) {
     exit;
 }
 
-funcall \&collect_albums, $ARGV[0];
+funcall \&fetch_albums, $ARGV[0];
