@@ -33,6 +33,7 @@
 
 use strict;
 use warnings;
+use 5.010;
 use Cwd "cwd";
 use File::pushd;
 use File::Spec "abs2rel";
@@ -110,10 +111,12 @@ sub fetch_vorbis_tags_file {
 # valid album, and return it in an arrayref form.
 # If not, issue an error message and return 0.
 sub fetch_vorbis_tags_fileset {
-    my $files = shift;
-    my $file0 = shift $files;
+    my $files = shift or die "Error: \"files\" argument not specified";
+    my $file0 = shift $files or die "Error: empty file list";
     my $tagset0 = fetch_vorbis_tags_file($file0);
+    my $has_unneeded_tag = 0;
     my $has_missing_tag = 0;
+    my $has_mismatching_tag = 0;
 
     unless ($tagset0) {
         _error sprintf("NO_VORBIS_TAGS  %s/%s\n", rcwd, $file0);
@@ -122,15 +125,24 @@ sub fetch_vorbis_tags_fileset {
 
     my @tagsets = ($tagset0);
 
+    # Check tagset0 for unneeded tags.
+    map( { unless ($_ ~~ ["TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER",
+                          "TRACKTOTAL", "DISCNUMBER", "GENRE"]) {
+               _error sprintf("        UNUSED_TAG  %s in %s/%s\n",
+                              $_, rcwd, $file0);
+               $has_unneeded_tag = 1; }
+         }
+         keys $tagset0);
+
     # Check tagset0 for empty tags.
-    map( { unless ($tagsets[0]->{$_}) {
+    map( { unless ($tagset0->{$_}) {
                _error sprintf("    MISSING_TAG_%-8s    %s/%s\n",
-                              $_, rcwd, $$files[0]);
+                              $_, rcwd, $file0);
                $has_missing_tag = 1; }
          }
          ("TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER"));
 
-    return 0 if $has_missing_tag;
+    return 0 if $has_missing_tag or $has_unneeded_tag;
 
     foreach my $file (@{$files}) {
         my $tagset = fetch_vorbis_tags_file($file);
@@ -140,8 +152,16 @@ sub fetch_vorbis_tags_fileset {
             return 0;
         }
 
-        # Check the remaining tagsets for empty and mismatching tags.
-        # Terminate on first error.
+        # Check the remaining tagsets for unneeded tags.
+        map( { unless ($_ ~~ ["TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER",
+                              "TRACKTOTAL", "DISCNUMBER", "GENRE"]) {
+                   _error sprintf("        UNUSED_TAG  %s in %s/%s\n",
+                                  $_, rcwd, $file);
+                   $has_unneeded_tag = 1; }
+             }
+             keys $tagset);
+
+        # Check the remaining tagsets for empty tags.
         map( { unless ($tagset->{$_}) {
                    _error sprintf("    MISSING_TAG_%-8s    %s/%s\n",
                                   $_, rcwd, $file);
@@ -149,7 +169,18 @@ sub fetch_vorbis_tags_fileset {
              }
              ("TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER"));
 
-        if ($has_missing_tag) {
+        # Check the remaining tagsets for mismatching tags.
+        map( { my $tag0 = $tagset0->{$_};
+               my $tag = $tagset->{$_};
+               unless ((!$tag0 && !$tag)
+                       or ($tagset->{$_} eq $tagset0->{$_})) {
+                   _error sprintf("    TAG_MISMATCH_%-7s    (\"%s\" vs \"%s\") in %s/%s\n",
+                                  $_, $tagset->{$_}, $tagset0->{$_}, rcwd, $file);
+                   $has_mismatching_tag = 1; }
+             }
+             ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
+
+        if ($has_missing_tag or $has_mismatching_tag or $has_unneeded_tag) {
             return 0;
         } else {
             push(@tagsets, $tagset);
@@ -257,7 +288,7 @@ sub fetch_albums {
     } elsif (!@mp3 && (@flac>1) && !@ape) {
         printf("FLAC            %s\n", rcwd);
 
-        my $data = fetch_vorbis_tags_fileset(\@flac);
+        my $vorbis_tags = fetch_vorbis_tags_fileset(\@flac);
 
         return 1;
     } else {
