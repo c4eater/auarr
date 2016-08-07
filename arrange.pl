@@ -128,6 +128,9 @@ sub fetch_vorbis_tags_file {
 #     Required tags are: "TITLE" "ARTIST" "ALBUM" "DATE" "TRACKNUMBER" "GENRE".
 #     Without these tags, it is simply dangerous to perform automatic renaming.
 #
+#     - A tag mismatch (different values for the different files) in any of the
+#     following tags: "TITLE" "ARTIST" "ALBUM" "DATE" "GENRE".
+#
 #     - A prohibited symbol in _any_ of the tags.
 #     A "prohibited symbol" is a symbol that matches [?/\~].
 #     Again, it is dangerous to perform automatic renaming in this case.
@@ -164,12 +167,12 @@ sub fetch_vorbis_tags_fileset {
 
     # significant errors (to risky to process; return 0)
     my $has_missing_tag = 0;
+    my $has_mismatching_tag = 0;
     my $has_missing_track = 0;
     my $has_prohibited_symbol = 0;
 
     # shallow errors (can be fixed automatically)
     my $has_unneeded_tag = 0;
-    my $has_mismatching_tag = 0;
     my $has_lowercase_tag = 0;
     my $has_wrong_trackid_format = 0;
 
@@ -188,11 +191,11 @@ sub fetch_vorbis_tags_fileset {
         foreach my $key (keys $tagset) {
             unless (grep /$key/, @required_tags) {
                 if (grep /$key/i, @required_tags) {
-                    _error sprintf("    LOWERCASE_TAG              %s=\"%s\" in %s/%s\n",
+                    _warn sprintf("    LOWERCASE_TAG              %s=\"%s\" in %s/%s\n",
                                    $key, $tagset->{$key}, rcwd, $file);
                     $has_lowercase_tag = 1;
                 } else {
-                    _error sprintf("    UNNEDED_TAG                %s=\"%s\" in %s/%s\n",
+                    _warn sprintf("    UNNEDED_TAG                %s=\"%s\" in %s/%s\n",
                                    $key, $tagset->{$key}, rcwd, $file);
                     $has_unneeded_tag = 1;
                 }
@@ -221,12 +224,13 @@ sub fetch_vorbis_tags_fileset {
                  ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
         }
 
-        if ($has_missing_tag or $has_missing_track or $has_prohibited_symbol) {
+        if ($has_missing_tag or $has_mismatching_tag or $has_missing_track
+            or $has_prohibited_symbol) {
             # critical error
             return 0;
         } elsif ((defined $opt_no_fix_tags) and
-                   $has_unneeded_tag || $has_mismatching_tag
-                   || $has_lowercase_tag || $has_wrong_trackid_format) {
+                   $has_unneeded_tag || $has_lowercase_tag
+                   || $has_wrong_trackid_format) {
             # non-critical error but explicitly asked not to modify anything
             return 0;
         } else {
