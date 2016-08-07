@@ -42,16 +42,26 @@ use Term::ANSIColor;
 use Data::Dumper;
 
 
+our($opt_help, $opt_remove_source, $opt_no_fix_tags, $opt_no_move_to_destdir);
+
 
 # Print out the help.
 sub help {
     print "\nUsage: ", colored(['bold'], "arrange.pl"),
-          " [-hr]\n\n";
+          " [OPTION]... SOURCE_DIR DEST_DIR\n\n";
+    print "Options:\n";
     print "\t", colored(['bold'], "-h, --help\n"),
           "\t\tShow the help screen.\n";
     print "\n";
     print "\t", colored(['bold'], "-r, --remove-source\n"),
           "\t\tRemove source directories in case of successful processing.\n";
+    print "\n";
+    print "\t", colored(['bold'], "--no-move-to-destdir\n"),
+          "\t\tOnly fix tags, do not copy/move anything to the destination directory.\n";
+    print "\n";
+    print "\t", colored(['bold'], "--no-fix-tags\n"),
+          "\t\tOnly scan tags and print out errors, do not modify anything.\n",
+          "\t\tImplies --no-move-to-destdir. DEST_DIR is not required in this case.\n\n";
 }
 
 
@@ -108,41 +118,60 @@ sub fetch_vorbis_tags_file {
 
 
 # Collect Vorbis tags of the given list of FLAC files if these files form a
-# valid album, and return it in an arrayref form.
-# If not, issue an error message and return 0.
+# valid album, and return these tags in a form of an array of hashes (1 hash
+# object =  1 tagset = 1 file).
+#
+# Tag validation is performed. The tag errors can be either critical or
+# non-critical. The critical tag errors are:
+#
+#     - A missing required tag in _any_ of the files.
+#     Required tags are: "TITLE" "ARTIST" "ALBUM" "DATE" "TRACKNUMBER" "GENRE".
+#     Without these tags, it is simply dangerous to perform automatic renaming.
+#
+#     - A prohibited symbol in _any_ of the tags.
+#     A "prohibited symbol" is a symbol that matches [?/\~].
+#     Again, it is dangerous to perform automatic renaming in this case.
+#
+#     - A missing tracknumber.
+#     (This is pretty self-explanatory.)
+#
+# If a critical tag error is encountered, issue an error message and return 0.
+#
+#
+# The non-critical tag errors are:
+#
+#     - A missing TRACKTOTAL tag.
+#     In case of autocorrection enabled, TRACKTOTAL is filled automatically.
+#
+#     - A presence of an "unneeded" tag.
+#     An unneeded tag is anything that is not a required tag or the TRACKTOTAL
+#     tag or the DISCNUMBER tag or the PERFORMER tag. An example would be a
+#     COMMENT tag. Normally, no one ever cares of the contents of these tags,
+#     and they are simply polluting the Vorbis data. In case of autocorrection
+#     enabled, these tags are removed.
+#
+#     - A wrong format of the TRACKNUMBER tag.
+#     A trailing zero in TRACKNUMBER is an error, as opposed to file names,
+#     where a trailing zero should be normally present (for a better look and
+#     a correct lexicographical ordering).
+#
+# If a non-critical tag error is encountered, there are 2 possible scenarios:
+#     - If autocorrection is off (--no-fix-tags), just return 0;
+#     - Otherwise, autocorrect the tags and proceed.
 sub fetch_vorbis_tags_fileset {
     my $files = shift or die "Error: \"files\" argument not specified";
-    my $file0 = shift $files or die "Error: empty file list";
-    my $tagset0 = fetch_vorbis_tags_file($file0);
-    my $has_unneeded_tag = 0;
+    my @tagsets = ();
+
+    # significant errors (to risky to process; return 0)
     my $has_missing_tag = 0;
+    my $has_missing_track = 0;
+    my $has_prohibited_symbol = 0;
+
+    # shallow errors (can be fixed automatically)
+    my $has_unneeded_tag = 0;
     my $has_mismatching_tag = 0;
-
-    unless ($tagset0) {
-        _error sprintf("NO_VORBIS_TAGS  %s/%s\n", rcwd, $file0);
-        return 0;
-    }
-
-    my @tagsets = ($tagset0);
-
-    # Check tagset0 for unneeded tags.
-    map( { unless ($_ ~~ ["TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER",
-                          "TRACKTOTAL", "DISCNUMBER", "GENRE"]) {
-               _error sprintf("        UNUSED_TAG  %s in %s/%s\n",
-                              $_, rcwd, $file0);
-               $has_unneeded_tag = 1; }
-         }
-         keys $tagset0);
-
-    # Check tagset0 for empty tags.
-    map( { unless ($tagset0->{$_}) {
-               _error sprintf("    MISSING_TAG_%-8s    %s/%s\n",
-                              $_, rcwd, $file0);
-               $has_missing_tag = 1; }
-         }
-         ("TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER"));
-
-    return 0 if $has_missing_tag or $has_unneeded_tag;
+    my $has_lowercase_tag = 0;
+    my $has_wrong_trackid_format = 0;
 
     foreach my $file (@{$files}) {
         my $tagset = fetch_vorbis_tags_file($file);
@@ -152,35 +181,53 @@ sub fetch_vorbis_tags_fileset {
             return 0;
         }
 
-        # Check the remaining tagsets for unneeded tags.
-        map( { unless ($_ ~~ ["TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER",
-                              "TRACKTOTAL", "DISCNUMBER", "GENRE"]) {
-                   _error sprintf("        UNUSED_TAG  %s in %s/%s\n",
-                                  $_, rcwd, $file);
-                   $has_unneeded_tag = 1; }
-             }
-             keys $tagset);
+        # Check $tagset for unneeded/lowercase tags.
+        my @required_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER",
+                             "TRACKTOTAL", "DISCNUMBER", "GENRE");
 
-        # Check the remaining tagsets for empty tags.
+        foreach my $key (keys $tagset) {
+            unless (grep /$key/, @required_tags) {
+                if (grep /$key/i, @required_tags) {
+                    _error sprintf("    LOWERCASE_TAG              %s=\"%s\" in %s/%s\n",
+                                   $key, $tagset->{$key}, rcwd, $file);
+                    $has_lowercase_tag = 1;
+                } else {
+                    _error sprintf("    UNNEDED_TAG                %s=\"%s\" in %s/%s\n",
+                                   $key, $tagset->{$key}, rcwd, $file);
+                    $has_unneeded_tag = 1;
+                }
+            }
+        }
+
+        # Check $tagset for empty tags.
         map( { unless ($tagset->{$_}) {
-                   _error sprintf("    MISSING_TAG_%-8s    %s/%s\n",
+                   _error sprintf("    MISSING_TAG_%-11s    %s/%s\n",
                                   $_, rcwd, $file);
                    $has_missing_tag = 1; }
              }
              ("TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER"));
 
-        # Check the remaining tagsets for mismatching tags.
-        map( { my $tag0 = $tagset0->{$_};
-               my $tag = $tagset->{$_};
-               unless ((!$tag0 && !$tag)
-                       or ($tagset->{$_} eq $tagset0->{$_})) {
-                   _error sprintf("    TAG_MISMATCH_%-7s    (\"%s\" vs \"%s\") in %s/%s\n",
-                                  $_, $tagset->{$_}, $tagset0->{$_}, rcwd, $file);
-                   $has_mismatching_tag = 1; }
-             }
-             ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
+        # Check $tagset for mismatching tags.
+        unless ($file eq ${$files}[0]) {
+            map( { my $tag0 = $tagsets[0]->{$_};
+                   my $tag = $tagset->{$_};
+                   unless ((!$tag0 && !$tag)
+                           or ($tagset->{$_} eq $tagsets[0]->{$_})) {
+                       _error sprintf("    TAG_MISMATCH_%-7s    (\"%s\" vs \"%s\") in %s/%s\n",
+                                      $_, $tagset->{$_}, $tagsets[0]->{$_},
+                                      rcwd, $file);
+                       $has_mismatching_tag = 1; }
+                 }
+                 ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
+        }
 
-        if ($has_missing_tag or $has_mismatching_tag or $has_unneeded_tag) {
+        if ($has_missing_tag or $has_missing_track or $has_prohibited_symbol) {
+            # critical error
+            return 0;
+        } elsif ((defined $opt_no_fix_tags) and
+                   $has_unneeded_tag || $has_mismatching_tag
+                   || $has_lowercase_tag || $has_wrong_trackid_format) {
+            # non-critical error but explicitly asked not to modify anything
             return 0;
         } else {
             push(@tagsets, $tagset);
@@ -322,17 +369,22 @@ sub apply_fn_to_dir {
 
 # OK, here we start.
 
-if ($#ARGV) {
+GetOptions('help'               => \$opt_help,
+           'remove-source'      => \$opt_remove_source,
+           'no-fix-tags'        => \$opt_no_fix_tags,
+           'no-move-to-destdir' => \$opt_no_move_to_destdir)
+    or die "Wrong command line options specified";
+
+if ((defined $opt_no_fix_tags) and (!defined $opt_no_move_to_destdir)) {
+    $opt_no_move_to_destdir = 1;
+}
+
+if ((defined $opt_no_move_to_destdir) && ($#ARGV != 0)
+    || (!defined $opt_no_move_to_destdir) && ($#ARGV != 1)) {
     print "\nWrong number of arguments.\n";
     help;
     exit;
 }
-
-our($opt_help, $opt_remove_source);
-
-GetOptions('help'          => \$opt_help,
-           'remove-source' => \$opt_remove_source)
-    or die "Wrong command line options specified";
 
 if (defined $opt_help) {
     help;
