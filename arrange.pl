@@ -165,11 +165,8 @@ sub fetch_vorbis_tags_fileset {
     my $files = shift or die "Error: \"files\" argument not specified";
     my @tagsets = ();
 
-    # significant errors (to risky to process; return 0)
-    my $has_missing_tag = 0;
-    my $has_mismatching_tag = 0;
-    my $has_missing_track = 0;
-    my $has_prohibited_symbol = 0;
+    # critical errors (too risky to process; return 0)
+    my $has_critical_error = 0;
 
     # shallow errors (can be fixed automatically)
     my $has_unneeded_tag = 0;
@@ -184,13 +181,31 @@ sub fetch_vorbis_tags_fileset {
             return 0;
         }
 
-        # Check $tagset for unneeded/lowercase tags.
-        my @required_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER",
-                             "TRACKTOTAL", "DISCNUMBER", "GENRE");
+        # @significant_tags should be a superset of @required_tags
+        my @required_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
+                             "TRACKNUMBER");
+        my @significant_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
+                                "TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER");
 
+        # Check $tagset for missing tags.
+        map( {
+                unless ($tagset->{$_}) {
+                    my $rtag = $_;
+
+                    # Detect case mismatch (non-uppercase tag names are
+                    # considered invalid) but handle this later.
+                    unless (my @match = grep /$rtag/i, keys $tagset) {
+                        _error sprintf("    MISSING_TAG_%-11s    %s/%s\n", $_, rcwd, $file);
+                        $has_critical_error = 1;
+                    }
+                }
+             }
+             @required_tags);
+
+        # Check $tagset for unneeded/lowercase tags.
         foreach my $key (keys $tagset) {
-            unless (grep /$key/, @required_tags) {
-                if (grep /$key/i, @required_tags) {
+            unless (grep /$key/, @significant_tags) {
+                if (grep /$key/i, @significant_tags) {
                     _warn sprintf("    LOWERCASE_TAG              %s=\"%s\" in %s/%s\n",
                                    $key, $tagset->{$key}, rcwd, $file);
                     $has_lowercase_tag = 1;
@@ -202,13 +217,9 @@ sub fetch_vorbis_tags_fileset {
             }
         }
 
-        # Check $tagset for empty tags.
-        map( { unless ($tagset->{$_}) {
-                   _error sprintf("    MISSING_TAG_%-11s    %s/%s\n",
-                                  $_, rcwd, $file);
-                   $has_missing_tag = 1; }
-             }
-             ("TITLE", "ARTIST", "ALBUM", "DATE", "TRACKNUMBER"));
+        return 0 if $has_critical_error ||
+            (defined($opt_no_fix_tags) and
+             $has_unneeded_tag || $has_lowercase_tag);
 
         # Check $tagset for mismatching tags.
         unless ($file eq ${$files}[0]) {
@@ -219,14 +230,12 @@ sub fetch_vorbis_tags_fileset {
                        _error sprintf("    TAG_MISMATCH_%-7s    (\"%s\" vs \"%s\") in %s/%s\n",
                                       $_, $tagset->{$_}, $tagsets[0]->{$_},
                                       rcwd, $file);
-                       $has_mismatching_tag = 1; }
+                       $has_critical_error = 1; }
                  }
                  ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
         }
 
-        if ($has_missing_tag or $has_mismatching_tag or $has_missing_track
-            or $has_prohibited_symbol) {
-            # critical error
+        if ($has_critical_error) {
             return 0;
         } elsif ((defined $opt_no_fix_tags) and
                    $has_unneeded_tag || $has_lowercase_tag
