@@ -199,7 +199,7 @@ sub fetch_vorbis_tags_fileset {
                     # For now, allow a case mismatch in order to not confuse the
                     # user with a "missing tag" error while it is actually a
                     # case mismatch error.
-                    unless (my @match = grep /$tag/i, keys $tagset) {
+                    unless (my @match = grep /$tag/i, keys %$tagset) {
                         _error sprintf("    MISSING_TAG_%-11s    %s/%s\n",
                                        $tag, rcwd, $file);
                         $has_missing_tag = 1;
@@ -209,7 +209,7 @@ sub fetch_vorbis_tags_fileset {
              @required_tags);
 
         # Check $tagset for unneeded/lowercase tags.
-        foreach my $key (keys $tagset) {
+        foreach my $key (keys %$tagset) {
             unless (grep /$key/, @significant_tags) {
                 if (grep /$key/i, @significant_tags) {
                     _warn sprintf("    NON_UPPERCASE_TAG          %s=\"%s\" in %s/%s\n",
@@ -223,7 +223,7 @@ sub fetch_vorbis_tags_fileset {
             }
         }
 
-        return 0 if $has_missing_tag;
+        return 0 if $has_missing_tag || $has_non_uppercase_tag;
 
         # Check the TRACKNUMBER format correctness.
         if ($tagset->{"TRACKNUMBER"} =~ /^0\d+$/) {
@@ -245,39 +245,8 @@ sub fetch_vorbis_tags_fileset {
                  ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
         }
 
-        # Calculate the expected track count and check if there are missing tracks.
-        my @tracknumbers = sort(map({ $_->{"TRACKNUMBER"}} @tagsets));
-        my $expected_tracktotal = @tagsets <= $tracknumbers[-1] ?
-            $tracknumbers[-1] : @tagsets;
-        my @expected_tracknumbers = (1 .. $expected_tracktotal);
-        my @missing_tracknumbers = ();
-
-        foreach my $n (@tracknumbers) {
-            my $expected_tracknumber = shift @expected_tracknumbers;
-            next if $n eq $expected_tracknumber;
-            push(@missing_tracknumbers, $expected_tracknumber);
-
-            while (@tracknumbers) {
-                $expected_tracknumber = shift @expected_tracknumbers;
-                last if $n eq $expected_tracknumber;
-                push(@missing_tracknumbers, $expected_tracknumber);
-            }
-        }
-
-        if (@missing_tracknumbers) {
-            _error sprintf("    MISSING_TRACK             %s in %s/%s\n",
-                           join(",", @tracknumbers), rcwd, $file);
-        }
-
-        # Check $tagset for a wrong TRACKTOTAL value.
-        if (!$tagset->{"TRACKTOTAL"}
-            or $tagset->{"TRACKTOTAL"} ne $expected_tracktotal) {
-            _warn sprintf("    BAD_TRACKTOTAL             \"%s\" (expected %s) in %s/%s\n",
-                      $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
-            $has_bad_tracktotal = 1;
-        }
-
-        if ($has_critical_error) {
+        if ($has_missing_tag || $has_tag_mismatch) {
+            # critical error
             return 0;
         } elsif ((defined $opt_no_fix_tags) and
                    $has_unneeded_tag || $has_non_uppercase_tag
@@ -288,6 +257,53 @@ sub fetch_vorbis_tags_fileset {
         } else {
             push(@tagsets, $tagset);
         }
+    }
+
+    # Check if there are missing tracks.
+    my $expected_tracktotal = @tagsets;
+
+    unless (!@tagsets or $has_wrong_tracknumber_format) {
+        my @tracknumbers = sort({$a <=> $b} map({ $_->{"TRACKNUMBER"}} @tagsets));
+        $expected_tracktotal = $tracknumbers[-1] if @tagsets <= $tracknumbers[-1];
+        my @expected_tracknumbers = (1 .. $expected_tracktotal);
+        my @missing_tracknumbers = ();
+
+        foreach my $n (@tracknumbers) {
+            my $expected_tracknumber = shift @expected_tracknumbers;
+            next if $n == $expected_tracknumber;
+            push(@missing_tracknumbers, $expected_tracknumber);
+
+            while (@expected_tracknumbers) {
+                $expected_tracknumber = shift @expected_tracknumbers;
+                last if $n == $expected_tracknumber;
+                push(@missing_tracknumbers, $expected_tracknumber);
+            }
+        }
+
+        if (@missing_tracknumbers) {
+            _error sprintf("    MISSING_TRACK             %s in %s\n",
+                           join(",", @missing_tracknumbers), rcwd);
+            $has_missing_track = 1;
+            return 0;
+        }
+    }
+
+    # Check all tagsets for a wrong TRACKTOTAL value.
+    foreach my $tagset (@tagsets) {
+        if (!$tagset->{"TRACKTOTAL"}
+            or $tagset->{"TRACKTOTAL"} ne $expected_tracktotal) {
+            _warn sprintf("    BAD_TRACKTOTAL             \"%s\" (expected %s) in %s\n",
+                          $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd);
+            $has_bad_tracktotal = 1;
+        }
+    }
+
+    if ($has_missing_track) {
+        # critical error
+        return 0;
+    } elsif (defined $opt_no_fix_tags and $has_bad_tracktotal) {
+        # non-critical error but explicitly asked not to modify anything
+        return 0;
     }
 
     return \@tagsets;
