@@ -15,12 +15,12 @@
 # following criteria:
 #
 #     - The directory has no child directories other than a scans directory
-#       (optional);
+#       (optional).
 #
 #     - The directory contains audio data in one of the following forms:
-#           - list of audio tracks of the same type (mp3, flac, ape, etc)
+#           - list of audio tracks of the same type (mp3, flac, ape, etc);
 #           - an unsplit audio file (flac, wav, wv, iso, etc) + cuesheet +
-#             logfile (optional)
+#             logfile (optional).
 #
 #     - The directory has no files other than the audio files specified above
 #       and, optionally, the following ones:
@@ -121,8 +121,9 @@ sub fetch_vorbis_tags_file {
 # valid album, and return these tags in a form of an array of hashes (1 hash
 # object =  1 tagset = 1 file).
 #
-# Tag validation is performed. The tag errors can be either critical or
-# non-critical. The critical tag errors are:
+# Tag scanning includes the tag validation process, which can result in
+# encountering what is called a "tag error". The tag errors can be either
+# critical or non-critical. The critical tag errors are:
 #
 #     - A missing required tag in _any_ of the files.
 #     Required tags are: "TITLE" "ARTIST" "ALBUM" "DATE" "TRACKNUMBER" "GENRE".
@@ -131,20 +132,12 @@ sub fetch_vorbis_tags_file {
 #     - A tag mismatch (different values for the different files) in any of the
 #     following tags: "TITLE" "ARTIST" "ALBUM" "DATE" "GENRE".
 #
-#     - A prohibited symbol in _any_ of the tags.
-#     A "prohibited symbol" is a symbol that matches [?/\~].
-#     Again, it is dangerous to perform automatic renaming in this case.
-#
-#     - A missing tracknumber.
-#     (This is pretty self-explanatory.)
+#     - A missing track (TRACKNUMBERs not forming a continuous sequence).
 #
 # If a critical tag error is encountered, issue an error message and return 0.
 #
 #
 # The non-critical tag errors are:
-#
-#     - A missing TRACKTOTAL tag.
-#     In case of autocorrection enabled, TRACKTOTAL is filled automatically.
 #
 #     - A presence of an "unneeded" tag.
 #     An unneeded tag is anything that is not a required tag or the TRACKTOTAL
@@ -153,25 +146,36 @@ sub fetch_vorbis_tags_file {
 #     and they are simply polluting the Vorbis data. In case of autocorrection
 #     enabled, these tags are removed.
 #
+#     - A non-uppercased tag name.
+#     The standart requires the tag names to come in uppercase. If
+#     autocorrection is enabled, the tag name will be converted to uppercase.
+#
 #     - A wrong format of the TRACKNUMBER tag.
 #     A trailing zero in TRACKNUMBER is an error, as opposed to file names,
 #     where a trailing zero should be normally present (for a better look and
 #     a correct lexicographical ordering).
 #
+#     - A missing TRACKTOTAL tag.
+#     In case of autocorrection enabled, TRACKTOTAL is filled automatically.
+#
 # If a non-critical tag error is encountered, there are 2 possible scenarios:
-#     - If autocorrection is off (--no-fix-tags), just return 0;
-#     - Otherwise, autocorrect the tags and proceed.
+#     - If autocorrection is off (--no-fix-tags), issue an error message and
+#     return 0;
+#     - Otherwise, issue a warning message, autocorrect the tag and continue.
 sub fetch_vorbis_tags_fileset {
     my $files = shift or die "Error: \"files\" argument not specified";
     my @tagsets = ();
 
     # critical errors (too risky to process; return 0)
-    my $has_critical_error = 0;
+    my $has_missing_tag = 0;
+    my $has_tag_mismatch = 0;
+    my $has_missing_track = 0;
 
     # shallow errors (can be fixed automatically)
     my $has_unneeded_tag = 0;
-    my $has_lowercase_tag = 0;
-    my $has_wrong_trackid_format = 0;
+    my $has_non_uppercase_tag = 0;
+    my $has_wrong_tracknumber_format = 0;
+    my $has_bad_tracktotal = 0;
 
     foreach my $file (@{$files}) {
         my $tagset = fetch_vorbis_tags_file($file);
@@ -190,13 +194,15 @@ sub fetch_vorbis_tags_fileset {
         # Check $tagset for missing tags.
         map( {
                 unless ($tagset->{$_}) {
-                    my $rtag = $_;
+                    my $tag = $_;
 
-                    # Detect case mismatch (non-uppercase tag names are
-                    # considered invalid) but handle this later.
-                    unless (my @match = grep /$rtag/i, keys $tagset) {
-                        _error sprintf("    MISSING_TAG_%-11s    %s/%s\n", $_, rcwd, $file);
-                        $has_critical_error = 1;
+                    # For now, allow a case mismatch in order to not confuse the
+                    # user with a "missing tag" error while it is actually a
+                    # case mismatch error.
+                    unless (my @match = grep /$tag/i, keys $tagset) {
+                        _error sprintf("    MISSING_TAG_%-11s    %s/%s\n",
+                                       $tag, rcwd, $file);
+                        $has_missing_tag = 1;
                     }
                 }
              }
@@ -206,9 +212,9 @@ sub fetch_vorbis_tags_fileset {
         foreach my $key (keys $tagset) {
             unless (grep /$key/, @significant_tags) {
                 if (grep /$key/i, @significant_tags) {
-                    _warn sprintf("    LOWERCASE_TAG              %s=\"%s\" in %s/%s\n",
+                    _warn sprintf("    NON_UPPERCASE_TAG          %s=\"%s\" in %s/%s\n",
                                    $key, $tagset->{$key}, rcwd, $file);
-                    $has_lowercase_tag = 1;
+                    $has_non_uppercase_tag = 1;
                 } else {
                     _warn sprintf("    UNNEDED_TAG                %s=\"%s\" in %s/%s\n",
                                    $key, $tagset->{$key}, rcwd, $file);
@@ -217,29 +223,66 @@ sub fetch_vorbis_tags_fileset {
             }
         }
 
-        return 0 if $has_critical_error ||
-            (defined($opt_no_fix_tags) and
-             $has_unneeded_tag || $has_lowercase_tag);
+        return 0 if $has_missing_tag;
 
-        # Check $tagset for mismatching tags.
-        unless ($file eq ${$files}[0]) {
-            map( { my $tag0 = $tagsets[0]->{$_};
-                   my $tag = $tagset->{$_};
-                   unless ((!$tag0 && !$tag)
-                           or ($tagset->{$_} eq $tagsets[0]->{$_})) {
+        # Check the TRACKNUMBER format correctness.
+        if ($tagset->{"TRACKNUMBER"} =~ /^0\d+$/) {
+            _warn sprintf("    BAD_TRACKNUMBER_FORMAT     %s in %s/%s\n",
+                          $tagset->{"TRACKNUMBER"}, rcwd, $file);
+            $has_wrong_tracknumber_format = 1;
+        }
+
+        # Check every $tagset for mismatching tags, except for the first tagset.
+        if (@tagsets) {
+            map( { my $value0 = $tagsets[0]->{$_};
+                   my $value = $tagset->{$_};
+
+                   unless ((!$value0 && !$value) or ($value0 eq $value)) {
                        _error sprintf("    TAG_MISMATCH_%-7s    (\"%s\" vs \"%s\") in %s/%s\n",
-                                      $_, $tagset->{$_}, $tagsets[0]->{$_},
-                                      rcwd, $file);
-                       $has_critical_error = 1; }
+                                      $_, $value, $value0, rcwd, $file);
+                       $has_tag_mismatch = 1; }
                  }
                  ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
+        }
+
+        # Calculate the expected track count and check if there are missing tracks.
+        my @tracknumbers = sort(map({ $_->{"TRACKNUMBER"}} @tagsets));
+        my $expected_tracktotal = @tagsets <= $tracknumbers[-1] ?
+            $tracknumbers[-1] : @tagsets;
+        my @expected_tracknumbers = (1 .. $expected_tracktotal);
+        my @missing_tracknumbers = ();
+
+        foreach my $n (@tracknumbers) {
+            my $expected_tracknumber = shift @expected_tracknumbers;
+            next if $n eq $expected_tracknumber;
+            push(@missing_tracknumbers, $expected_tracknumber);
+
+            while (@tracknumbers) {
+                $expected_tracknumber = shift @expected_tracknumbers;
+                last if $n eq $expected_tracknumber;
+                push(@missing_tracknumbers, $expected_tracknumber);
+            }
+        }
+
+        if (@missing_tracknumbers) {
+            _error sprintf("    MISSING_TRACK             %s in %s/%s\n",
+                           join(",", @tracknumbers), rcwd, $file);
+        }
+
+        # Check $tagset for a wrong TRACKTOTAL value.
+        if (!$tagset->{"TRACKTOTAL"}
+            or $tagset->{"TRACKTOTAL"} ne $expected_tracktotal) {
+            _warn sprintf("    BAD_TRACKTOTAL             \"%s\" (expected %s) in %s/%s\n",
+                      $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
+            $has_bad_tracktotal = 1;
         }
 
         if ($has_critical_error) {
             return 0;
         } elsif ((defined $opt_no_fix_tags) and
-                   $has_unneeded_tag || $has_lowercase_tag
-                   || $has_wrong_trackid_format) {
+                   $has_unneeded_tag || $has_non_uppercase_tag
+                   || $has_wrong_tracknumber_format
+                   || $has_bad_tracktotal) {
             # non-critical error but explicitly asked not to modify anything
             return 0;
         } else {
@@ -278,7 +321,7 @@ sub fetch_scans {
 # Otherwise, the function returns 0. This can happen in two cases:
 #   - The directory has no audio files and the function just applied itself
 #     recursively to the subdirectories, hoping to fetch albums there;
-#   - An error occurred, e.g. the directory has mixed contents (audio files
+#   - An error occurs, e.g. the directory has mixed contents (audio files
 #     plus non-scans subdirectories).
 sub fetch_albums {
     my ($files, $dirs) = @_;
