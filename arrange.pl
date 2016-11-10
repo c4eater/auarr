@@ -250,8 +250,7 @@ sub fetch_vorbis_tags_fileset {
                     # user with a "missing tag" error while it is actually a
                     # case mismatch error.
                     unless (grep(/$tag/i, keys %$tagset)
-                            || (!grep(/date/i, keys %$tagset)
-                                && $has_recoverable_date_tag)){
+                            || ((lc($tag) eq "date") and $has_recoverable_date_tag)) {
                         _error sprintf("    MISSING_TAG_%-11s    %s/%s\n",
                                        $tag, rcwd, $file);
                         $has_missing_tag = 1;
