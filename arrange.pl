@@ -163,6 +163,10 @@ sub fetch_vorbis_tags_file {
 #     - A missing TRACKTOTAL tag.
 #     In case of autocorrection enabled, TRACKTOTAL is filled automatically.
 #
+#     - TOTALTRACKS tag instead of TRACKTOTAL.
+#     This is simply not standart compliant. Track count should be stored in
+#     TRACKTOTAL.
+#
 # If a non-critical tag error is encountered, there are 2 possible scenarios:
 #     - If autocorrection is off (--no-fix-tags), issue an error message and
 #     return 0;
@@ -183,6 +187,7 @@ sub fetch_vorbis_tags_fileset {
     my $has_non_uppercase_tag = 0;
     my $has_wrong_tracknumber_format = 0;
     my $has_bad_tracktotal = 0;
+    my $has_totaltracks_instead_of_tracktotal = 0;
     my $has_shallow_error = 0; # any of the above (a fileset-wide flag)
 
     foreach my $file (@{$files}) {
@@ -194,6 +199,7 @@ sub fetch_vorbis_tags_fileset {
         $has_non_uppercase_tag = 0;
         $has_wrong_tracknumber_format = 0;
         $has_bad_tracktotal = 0;
+        $has_totaltracks_instead_of_tracktotal = 0;
     
         my $tagset = fetch_vorbis_tags_file($file);
 
@@ -221,6 +227,18 @@ sub fetch_vorbis_tags_fileset {
             }
         }
 
+        # Check the presence of TOTALTRACKS tag.
+        if (grep(/totaltracks/i, keys %$tagset) 
+            && !grep(/tracktotal/i, keys %$tagset)) {
+            if ($opt_no_fix_tags) {
+                _warn sprintf("    HAS_TOTALTRACKS            in %s/%s\n",
+                              rcwd, $file);
+                $has_totaltracks_instead_of_tracktotal = 1;
+            } else {
+                # TODO: TOTALTRACKS -> TRACKTOTAL
+            }
+        }
+
         # Check $tagset for missing tags.
         map( {
                 unless ($tagset->{$_}) {
@@ -229,7 +247,7 @@ sub fetch_vorbis_tags_fileset {
                     # For now, allow a case mismatch in order to not confuse the
                     # user with a "missing tag" error while it is actually a
                     # case mismatch error.
-                    unless ((my @match = grep /$tag/i, keys %$tagset)
+                    unless (grep(/$tag/i, keys %$tagset)
                             || (!grep(/date/i, keys %$tagset)
                                 && $has_recoverable_date_tag)){
                         _error sprintf("    MISSING_TAG_%-11s    %s/%s\n",
@@ -252,7 +270,9 @@ sub fetch_vorbis_tags_fileset {
                         # TODO fix case mismatch
                     }
                 } else {
-                    if ($opt_no_fix_tags) {
+                    if ($opt_no_fix_tags
+                        and (lc($key) ne "totaltracks")
+                        or grep(/tracktotal/i, keys %$tagset)) {
                         _warn sprintf("    UNNEDED_TAG                %s=\"%s\" in %s/%s\n",
                                       $key, $tagset->{$key}, rcwd, $file);
                         $has_unneeded_tag = 1;
@@ -300,7 +320,8 @@ sub fetch_vorbis_tags_fileset {
             next;
         } elsif ($has_unneeded_tag || $has_non_uppercase_tag
                  || $has_wrong_tracknumber_format
-                 || $has_recoverable_date_tag) {
+                 || $has_recoverable_date_tag
+                 || $has_totaltracks_instead_of_tracktotal) {
             # shallow error
             $has_shallow_error = 1;
         }
