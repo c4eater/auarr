@@ -34,15 +34,17 @@
 use strict;
 use warnings;
 use 5.010;
-use Cwd "cwd";
+use Cwd qw(cwd realpath);
 use File::pushd;
-use File::Spec "abs2rel";
+use File::Basename qw(basename);
+use File::Spec qw(abs2rel);
 use Getopt::Long;
 use Term::ANSIColor;
 use Data::Dumper;
 
 
-our($opt_help, $opt_remove_source, $opt_no_fix_tags, $opt_no_move_to_destdir);
+our($opt_help, $opt_remove_source, $opt_no_fix_tags, $opt_no_move_to_destdir,
+    $opt_guess_year);
 
 
 # Print out the help.
@@ -61,7 +63,10 @@ sub help {
     print "\n";
     print "\t", colored(['bold'], "--no-fix-tags\n"),
           "\t\tOnly scan tags and print out errors, do not modify anything.\n",
-          "\t\tImplies --no-move-to-destdir. DEST_DIR is not required in this case.\n\n";
+          "\t\tImplies --no-move-to-destdir. DEST_DIR is not required in this case.\n";
+    print "\n";
+    print "\t", colored(['bold'], "--guess-year\n"),
+          "\t\t(Experimental) In case of missing DATE tag (= the release year) try to guess it from the parent directory name.\n\n";
 }
 
 
@@ -170,19 +175,32 @@ sub fetch_vorbis_tags_fileset {
     my $has_missing_tag = 0;
     my $has_tag_mismatch = 0;
     my $has_missing_track = 0;
+    my $has_critical_error = 0; # any of the above (a fileset-wide flag)
 
     # shallow errors (can be fixed automatically)
+    my $has_recoverable_date_tag = 0;
     my $has_unneeded_tag = 0;
     my $has_non_uppercase_tag = 0;
     my $has_wrong_tracknumber_format = 0;
     my $has_bad_tracktotal = 0;
+    my $has_shallow_error = 0; # any of the above (a fileset-wide flag)
 
     foreach my $file (@{$files}) {
+        $has_missing_tag = 0;
+        $has_tag_mismatch = 0;
+        $has_missing_track = 0;
+        $has_recoverable_date_tag = 0;
+        $has_unneeded_tag = 0;
+        $has_non_uppercase_tag = 0;
+        $has_wrong_tracknumber_format = 0;
+        $has_bad_tracktotal = 0;
+    
         my $tagset = fetch_vorbis_tags_file($file);
 
         unless ($tagset) {
             _error sprintf("    NO_VORBIS_TAGS  %s/%s\n", rcwd, $file);
-            return 0;
+            $has_critical_error = 1;
+            next;
         }
 
         # @significant_tags should be a superset of @required_tags
@@ -190,6 +208,18 @@ sub fetch_vorbis_tags_fileset {
                              "TRACKNUMBER");
         my @significant_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
                                 "TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER");
+
+        # Try to guess the value of the DATE tag.
+        if (!grep(/date/i, keys %$tagset) && $opt_guess_year
+            && ((my $year) = basename(realpath(rcwd)) =~ /^(\d{4})\D/)) {
+            if ($opt_no_fix_tags) {
+                _warn sprintf("    MISSING_DATE_RECOVERABLE   %s in %s/%s\n",
+                              $year, rcwd, $file);
+                $has_recoverable_date_tag = 1;
+            } else {
+                # TODO: autofill the DATE tag
+            }
+        }
 
         # Check $tagset for missing tags.
         map( {
@@ -199,7 +229,9 @@ sub fetch_vorbis_tags_fileset {
                     # For now, allow a case mismatch in order to not confuse the
                     # user with a "missing tag" error while it is actually a
                     # case mismatch error.
-                    unless (my @match = grep /$tag/i, keys %$tagset) {
+                    unless ((my @match = grep /$tag/i, keys %$tagset)
+                            || (!grep(/date/i, keys %$tagset)
+                                && $has_recoverable_date_tag)){
                         _error sprintf("    MISSING_TAG_%-11s    %s/%s\n",
                                        $tag, rcwd, $file);
                         $has_missing_tag = 1;
@@ -212,24 +244,40 @@ sub fetch_vorbis_tags_fileset {
         foreach my $key (keys %$tagset) {
             unless (grep /$key/, @significant_tags) {
                 if (grep /$key/i, @significant_tags) {
-                    _warn sprintf("    NON_UPPERCASE_TAG          %s=\"%s\" in %s/%s\n",
-                                   $key, $tagset->{$key}, rcwd, $file);
-                    $has_non_uppercase_tag = 1;
+                    if ($opt_no_fix_tags) {
+                        _warn sprintf("    NON_UPPERCASE_TAG          %s=\"%s\" in %s/%s\n",
+                                      $key, $tagset->{$key}, rcwd, $file);
+                        $has_non_uppercase_tag = 1;
+                    } else {
+                        # TODO fix case mismatch
+                    }
                 } else {
-                    _warn sprintf("    UNNEDED_TAG                %s=\"%s\" in %s/%s\n",
-                                   $key, $tagset->{$key}, rcwd, $file);
-                    $has_unneeded_tag = 1;
+                    if ($opt_no_fix_tags) {
+                        _warn sprintf("    UNNEDED_TAG                %s=\"%s\" in %s/%s\n",
+                                      $key, $tagset->{$key}, rcwd, $file);
+                        $has_unneeded_tag = 1;
+                    } else {
+                        # TODO delete unneeded tag
+                    }
                 }
             }
         }
 
-        return 0 if $has_missing_tag || $has_non_uppercase_tag;
+        if ($has_missing_tag || $has_non_uppercase_tag) {
+            # critical error
+            $has_critical_error = 1;
+            next;
+        } 
 
         # Check the TRACKNUMBER format correctness.
         if ($tagset->{"TRACKNUMBER"} =~ /^0\d+$/) {
-            _warn sprintf("    BAD_TRACKNUMBER_FORMAT     %s in %s/%s\n",
-                          $tagset->{"TRACKNUMBER"}, rcwd, $file);
-            $has_wrong_tracknumber_format = 1;
+            if ($opt_no_fix_tags) {
+                _warn sprintf("    BAD_TRACKNUMBER_FORMAT     %s in %s/%s\n",
+                              $tagset->{"TRACKNUMBER"}, rcwd, $file);
+                $has_wrong_tracknumber_format = 1;
+            } else {
+                # TODO fix trailing "0x" in tracknumber
+            }
         }
 
         # Check every $tagset for mismatching tags, except for the first tagset.
@@ -240,24 +288,27 @@ sub fetch_vorbis_tags_fileset {
                    unless ((!$value0 && !$value) or ($value0 eq $value)) {
                        _error sprintf("    TAG_MISMATCH_%-7s    (\"%s\" vs \"%s\") in %s/%s\n",
                                       $_, $value, $value0, rcwd, $file);
-                       $has_tag_mismatch = 1; }
+                       $has_tag_mismatch = 1;
+                   }
                  }
                  ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
         }
-
+        
         if ($has_missing_tag || $has_tag_mismatch) {
             # critical error
-            return 0;
-        } elsif ((defined $opt_no_fix_tags) and
-                   $has_unneeded_tag || $has_non_uppercase_tag
-                   || $has_wrong_tracknumber_format
-                   || $has_bad_tracktotal) {
-            # non-critical error but explicitly asked not to modify anything
-            return 0;
-        } else {
-            push(@tagsets, $tagset);
+            $has_critical_error = 1;
+            next;
+        } elsif ($has_unneeded_tag || $has_non_uppercase_tag
+                 || $has_wrong_tracknumber_format
+                 || $has_recoverable_date_tag) {
+            # shallow error
+            $has_shallow_error = 1;
         }
+
+        push(@tagsets, $tagset);
     }
+
+    return 0 if $has_critical_error or $has_shallow_error;
 
     # Check if there are missing tracks.
     my $expected_tracktotal = @tagsets;
@@ -284,7 +335,6 @@ sub fetch_vorbis_tags_fileset {
             _error sprintf("    MISSING_TRACK             %s in %s\n",
                            join(",", @missing_tracknumbers), rcwd);
             $has_missing_track = 1;
-            return 0;
         }
     }
 
@@ -292,19 +342,20 @@ sub fetch_vorbis_tags_fileset {
     foreach my $tagset (@tagsets) {
         if (!$tagset->{"TRACKTOTAL"}
             or $tagset->{"TRACKTOTAL"} ne $expected_tracktotal) {
-            _warn sprintf("    BAD_TRACKTOTAL             \"%s\" (expected %s) in %s\n",
-                          $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd);
-            $has_bad_tracktotal = 1;
+            if ($opt_no_fix_tags) {
+                _warn sprintf("    BAD_TRACKTOTAL             \"%s\" (expected %s) in %s\n",
+                              $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd);
+                $has_bad_tracktotal = 1;
+            } else {
+                # TODO fix TRACKTOTAL
+            }
         }
     }
 
-    if ($has_missing_track) {
-        # critical error
-        return 0;
-    } elsif (defined $opt_no_fix_tags and $has_bad_tracktotal) {
-        # non-critical error but explicitly asked not to modify anything
-        return 0;
-    }
+    $has_critical_error &= $has_missing_track;
+    $has_shallow_error &= $has_bad_tracktotal;
+
+    return 0 if $has_critical_error or $has_shallow_error;
 
     return \@tagsets;
 }
@@ -444,7 +495,8 @@ sub apply_fn_to_dir {
 GetOptions('help'               => \$opt_help,
            'remove-source'      => \$opt_remove_source,
            'no-fix-tags'        => \$opt_no_fix_tags,
-           'no-move-to-destdir' => \$opt_no_move_to_destdir)
+           'no-move-to-destdir' => \$opt_no_move_to_destdir,
+           'guess-year'         => \$opt_guess_year)
     or die "Wrong command line options specified";
 
 if ((defined $opt_no_fix_tags) and (!defined $opt_no_move_to_destdir)) {
