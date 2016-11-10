@@ -36,7 +36,7 @@ use warnings;
 use 5.010;
 use Cwd qw(cwd);
 use File::pushd;
-use File::Basename qw(basename);
+use File::Basename qw(basename dirname);
 use File::Spec qw(abs2rel);
 use Getopt::Long;
 use Term::ANSIColor;
@@ -217,7 +217,9 @@ sub fetch_vorbis_tags_fileset {
 
         # Try to guess the value of the DATE tag.
         if (!grep(/date/i, keys %$tagset) && $opt_guess_year
-            && ((my $year) = basename(rcwd) =~ /^(\d{4})\D/)) {
+            && ((my $year) = (basename(rcwd) =~ /^CD/ ?
+                              basename(dirname(rcwd)) : basename(rcwd))
+                =~ /^(\d{4})\D/)) {
             if ($opt_no_fix_tags) {
                 _warn sprintf("    MISSING_DATE_RECOVERABLE   %s in %s/%s\n",
                               $year, rcwd, $file);
