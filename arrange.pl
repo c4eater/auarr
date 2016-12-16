@@ -15,7 +15,7 @@
 # following criteria:
 #
 #     - The directory has no child directories other than a scans directory
-#       (optional).
+#       (optionally).
 #
 #     - The directory contains audio data in one of the following forms:
 #           - list of audio tracks of the same type (mp3, flac, ape, etc);
@@ -28,8 +28,8 @@
 #           - playlists (m3u, wpl, etc) - will be ignored during export;
 #           - image files (jpg, bmp etc) - will be considered scans/booklets
 #             and moved to a separate folder (except for "front.jpg" and
-#             "cover.jpg") - these will be considered front images and left
-#             in place; will be renamed to cover.jpg for consistency though.
+#             "cover.jpg" - these ones will be considered front images and left
+#             in place; will be renamed to cover.jpg for consistency though).
 
 use strict;
 use warnings;
@@ -43,8 +43,8 @@ use Term::ANSIColor;
 use Data::Dumper;
 
 
-our($opt_help, $opt_remove_source, $opt_no_fix_tags, $opt_no_move_to_destdir,
-    $opt_guess_year);
+our($opt_help, $opt_verbose, $opt_remove_source, $opt_no_fix_tags,
+    $opt_no_move_to_destdir, $opt_guess_year);
 
 
 # Print out the help.
@@ -54,6 +54,9 @@ sub help {
     print "Options:\n";
     print "\t", colored(['bold'], "-h, --help\n"),
           "\t\tShow the help screen.\n";
+    print "\n";
+    print "\t", colored(['bold'], "-v, --verbose\n"),
+          "\t\tMake the script more verbose (print Vorbis tags and other debug info).\n";
     print "\n";
     print "\t", colored(['bold'], "-r, --remove-source\n"),
           "\t\tRemove source directories in case of successful processing.\n";
@@ -89,12 +92,49 @@ sub _warn {
 
 
 
+# Print out a debugging message when the --verbose option is active.
+sub _debug {
+    return unless $opt_verbose;
+
+    my $msg = shift or return;
+
+    print STDOUT sprintf("\n==== DEBUG ====\n%s\n===============\n", $msg);
+}
+
+
+
 # Accept a directory name as an argument, and return the current working
 # directory name in a relative form, treating the argument as a basedir.
 sub rcwd {
     return File::Spec->abs2rel(cwd(), $ARGV[0]);
 }
 
+
+
+# Assign the specified value to the specified Vorbis tag in the specified file.
+sub set_vorbis_tag {
+    my $file = shift or die "Error: \"file\" argument not specified";
+
+    $file = $ARGV[0] . "/" . rcwd . "/" . $file;
+    
+    my $tag = shift or die "Error: \"tag\" argument not specified";
+    my $value = shift or die "Error: \"value\" argument not specified";
+
+    qx(metaflac --set-tag=\"$tag=$value\" \"$file\");
+}
+
+
+
+# Delete the specified Vorbis tag in the specified file.
+sub delete_vorbis_tag {
+    my $file = shift or die "Error: \"file\" argument not specified";
+
+    $file = $ARGV[0] . "/" . rcwd . "/" . $file;
+    
+    my $tag = shift or die "Error: \"tag\" argument not specified";
+
+    qx(metaflac --remove-tag=\"$tag\" \"$file\");
+}
 
 
 # Given a FLAC file name, return a hashref storing this file's Vorbis tags.
@@ -112,7 +152,7 @@ sub fetch_vorbis_tags_file {
     while (<$command_ostream>) {
         chomp;
         (my $key, my $value) = $_ =~ /comment\[[[:alnum:]]+\]: (.*)=(.*)/;
-        $vorbis_tags{$key} = $value if $key && $value;
+        $vorbis_tags{$key} = $value if $key;
     }
 
     close $command_ostream;
@@ -158,13 +198,15 @@ sub fetch_vorbis_tags_file {
 #     - A wrong format of the TRACKNUMBER tag.
 #     A trailing zero in TRACKNUMBER is an error, as opposed to file names,
 #     where a trailing zero should be normally present (for a better look and
-#     a correct lexicographical ordering).
+#     a correct lexicographical ordering). If autocorrection is enabled, the
+#     trailing zero will be removed.
 #
 #     - A missing TRACKTOTAL tag.
 #     In case of autocorrection enabled, TRACKTOTAL is filled automatically.
 #
 #     - TOTALTRACKS tag instead of TRACKTOTAL.
 #     This is simply not standart compliant. Track count should be stored in
+#     TRACKTOTAL. If autocorrection is enabled, TOTALTRACKS are renamed to
 #     TRACKTOTAL.
 #
 # If a non-critical tag error is encountered, there are 2 possible scenarios:
@@ -200,7 +242,7 @@ sub fetch_vorbis_tags_fileset {
         $has_wrong_tracknumber_format = 0;
         $has_bad_tracktotal = 0;
         $has_totaltracks_instead_of_tracktotal = 0;
-    
+
         my $tagset = fetch_vorbis_tags_file($file);
 
         unless ($tagset) {
@@ -209,35 +251,49 @@ sub fetch_vorbis_tags_fileset {
             next;
         }
 
+        _debug sprintf("%s/%s:\n%s",
+                       rcwd, $file, join("\n",
+                                         map({ sprintf("%s = %s",
+                                                       $_, $tagset->{$_}) }
+                                             keys %$tagset)));
+
         # @significant_tags should be a superset of @required_tags
         my @required_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
                              "TRACKNUMBER");
         my @significant_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
                                 "TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER");
 
-        # Try to guess the value of the DATE tag.
+        # Try to guess the value of the DATE tag if --guess-year is active.
         if (!grep(/date/i, keys %$tagset) && $opt_guess_year
             && ((my $year) = (basename(rcwd) =~ /^CD/ ?
                               basename(dirname(rcwd)) : basename(rcwd))
                 =~ /^(\d{4})\D/)) {
             if ($opt_no_fix_tags) {
-                _warn sprintf("    MISSING_DATE_RECOVERABLE   %s in %s/%s\n",
+                _warn sprintf("    MISSING_DATE_RECOVERABLE (guessed value: %s)   in %s/%s\n",
                               $year, rcwd, $file);
                 $has_recoverable_date_tag = 1;
             } else {
-                # TODO: autofill the DATE tag
+                _warn sprintf("    FIX_DATE_RECOVERABLE (new value: %s)   in %s/%s\n",
+                              $year, rcwd, $file);
+                $tagset->{"DATE"} = $year;
+                set_vorbis_tag($file, "DATE", $year);
             }
         }
 
         # Check the presence of TOTALTRACKS tag.
-        if (grep(/totaltracks/i, keys %$tagset) 
+        if (((my $tag) = grep(/totaltracks/i, keys %$tagset))
             && !grep(/tracktotal/i, keys %$tagset)) {
             if ($opt_no_fix_tags) {
-                _warn sprintf("    HAS_TOTALTRACKS            in %s/%s\n",
+                _warn sprintf("    HAS_TOTALTRACKS_INSTEAD_OF_TRACKTOTAL    in %s/%s\n",
                               rcwd, $file);
                 $has_totaltracks_instead_of_tracktotal = 1;
             } else {
-                # TODO: TOTALTRACKS -> TRACKTOTAL
+                _warn sprintf("    FIXED_TOTALTRACKS_INSTEAD_OF_TRACKTOTAL  in %s/%s\n",
+                              rcwd, $file);
+                set_vorbis_tag($file, "TRACKTOTAL", $tagset->{$tag});
+                $tagset->{"TRACKTOTAL"} = $tagset->{$tag};
+                delete_vorbis_tag($file, $tag);
+                delete $tagset->{$tag};
             }
         }
 
@@ -268,17 +324,26 @@ sub fetch_vorbis_tags_fileset {
                                       $key, $tagset->{$key}, rcwd, $file);
                         $has_non_uppercase_tag = 1;
                     } else {
-                        # TODO fix case mismatch
+                        _warn sprintf("    FIX_NON_UPPERCASE_TAG      %s=\"%s\" in %s/%s\n",
+                                      $key, $tagset->{$key}, rcwd, $file);
+                        my $value = $tagset->{$key};
+                        delete_vorbis_tag($file, $key);
+                        delete $tagset->{$key};
+                        set_vorbis_tag($file, uc($key), $value);
+                        $tagset->{uc($key)} = $value;
                     }
                 } else {
                     if ($opt_no_fix_tags
                         and (lc($key) ne "totaltracks")
                         or grep(/tracktotal/i, keys %$tagset)) {
-                        _warn sprintf("    UNNEDED_TAG                %s=\"%s\" in %s/%s\n",
+                        _warn sprintf("    UNNEEDED_TAG               %s=\"%s\" in %s/%s\n",
                                       $key, $tagset->{$key}, rcwd, $file);
                         $has_unneeded_tag = 1;
                     } else {
-                        # TODO delete unneeded tag
+                        _warn sprintf("    FIX_UNNEEDED_TAG           %s=\"%s\" in %s/%s\n",
+                                      $key, $tagset->{$key}, rcwd, $file);
+                        delete_vorbis_tag($file, $key);
+                        delete $tagset->{$key};
                     }
                 }
             }
@@ -288,7 +353,7 @@ sub fetch_vorbis_tags_fileset {
             # critical error
             $has_critical_error = 1;
             next;
-        } 
+        }
 
         # Check the TRACKNUMBER format correctness.
         if ($tagset->{"TRACKNUMBER"} =~ /^0\d+$/) {
@@ -297,7 +362,11 @@ sub fetch_vorbis_tags_fileset {
                               $tagset->{"TRACKNUMBER"}, rcwd, $file);
                 $has_wrong_tracknumber_format = 1;
             } else {
-                # TODO fix trailing "0x" in tracknumber
+                _warn sprintf("    FIX_BAD_TRACKNUMBER_FORMAT %s in %s/%s\n",
+                              $tagset->{"TRACKNUMBER"}, rcwd, $file);
+                $tagset->{"TRACKNUMBER"} =~ s/^0//;
+                delete_vorbis_tag($file, "TRACKNUMBER");
+                set_vorbis_tag($file, "TRACKNUMBER", $tagset->{"TRACKNUMBER"});
             }
         }
 
@@ -314,7 +383,7 @@ sub fetch_vorbis_tags_fileset {
                  }
                  ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
         }
-        
+
         if ($has_missing_tag || $has_tag_mismatch) {
             # critical error
             $has_critical_error = 1;
@@ -325,6 +394,7 @@ sub fetch_vorbis_tags_fileset {
                  || $has_totaltracks_instead_of_tracktotal) {
             # shallow error
             $has_shallow_error = 1;
+            next;
         }
 
         push(@tagsets, $tagset);
@@ -361,16 +431,25 @@ sub fetch_vorbis_tags_fileset {
     }
 
     # Check all tagsets for a wrong TRACKTOTAL value.
-    foreach my $tagset (@tagsets) {
-        if (!$tagset->{"TRACKTOTAL"}
-            or $tagset->{"TRACKTOTAL"} ne $expected_tracktotal) {
+    foreach my $file (@{$files}) {
+        my $tagset = fetch_vorbis_tags_file($file);
+
+        if (!$tagset->{"TRACKTOTAL"}) {
             if ($opt_no_fix_tags) {
-                _warn sprintf("    BAD_TRACKTOTAL             \"%s\" (expected %s) in %s\n",
-                              $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd);
+                _warn sprintf("    NO_TRACKTOTAL              (expected %d) in %s/%s\n",
+                              $expected_tracktotal, rcwd, $file);
                 $has_bad_tracktotal = 1;
             } else {
-                # TODO fix TRACKTOTAL
+                _warn sprintf("    FIX_NO_TRACKTOTAL          (new value: %d) in %s/%s\n",
+                              $expected_tracktotal, rcwd, $file);
+                set_vorbis_tag($file, "TRACKTOTAL", $expected_tracktotal);
+                $tagset->{"TRACKTOTAL"} = $expected_tracktotal;
             }
+        } elsif ($tagset->{"TRACKTOTAL"} ne $expected_tracktotal) {
+            # Logical conflict; avoid fixing automatically.
+            _warn sprintf("    BAD_TRACKTOTAL             \"%s\" (expected %d) in %s/%s\n",
+                          $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
+            $has_bad_tracktotal = 1;
         }
     }
 
@@ -515,13 +594,14 @@ sub apply_fn_to_dir {
 # OK, here we start.
 
 GetOptions('help'               => \$opt_help,
+           'verbose'            => \$opt_verbose,
            'remove-source'      => \$opt_remove_source,
            'no-fix-tags'        => \$opt_no_fix_tags,
            'no-move-to-destdir' => \$opt_no_move_to_destdir,
            'guess-year'         => \$opt_guess_year)
     or die "Wrong command line options specified";
 
-if ((defined $opt_no_fix_tags) and (!defined $opt_no_move_to_destdir)) {
+if (defined $opt_no_fix_tags) {
     $opt_no_move_to_destdir = 1;
 }
 
