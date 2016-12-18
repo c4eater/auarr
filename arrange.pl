@@ -36,6 +36,8 @@ use warnings;
 use 5.010;
 use Cwd qw(cwd);
 use File::pushd;
+use File::Copy;
+use File::Path qw(make_path);
 use File::Basename qw(basename dirname);
 use File::Spec qw(abs2rel);
 use Getopt::Long;
@@ -135,6 +137,7 @@ sub delete_vorbis_tag {
 
     qx(metaflac --remove-tag=\"$tag\" \"$file\");
 }
+
 
 
 # Given a FLAC file name, return a hashref storing this file's Vorbis tags.
@@ -560,6 +563,37 @@ sub fetch_albums {
         printf("FLAC            %s\n", rcwd);
 
         my $vorbis_tags = fetch_vorbis_tags_fileset(\@flac);
+
+        if ($vorbis_tags && !$opt_no_move_to_destdir) {
+            foreach my $flac_file (@flac) {
+                my $tagset = fetch_vorbis_tags_file($flac_file);
+
+                my $src = sprintf("%s/%s/%s", $ARGV[0], rcwd, $flac_file);
+
+                my $destdir = sprintf("%s/%s/%s - %s", $ARGV[1],
+                                      $tagset->{"ARTIST"},
+                                      $tagset->{"DATE"},
+                                      $tagset->{"ALBUM"});
+                my $dest = sprintf("%s/%02s - %s.flac",
+                                   $destdir,
+                                   $tagset->{"TRACKNUMBER"},
+                                   $tagset->{"TITLE"});
+
+                # drop nonprintable
+                $dest =~ s/[\?*:]//g;
+                $dest =~ s/[\\\|]/ /g;
+
+                make_path($destdir) if !-d $destdir;
+
+                if ($opt_remove_source) {
+                    move($src, $dest) or die sprintf("move failed: %s -> %s",
+                                                     $src, $dest);
+                } else {
+                    copy($src, $dest) or die sprintf("copy failed: %s -> %s",
+                                                     $src, $dest);
+                }
+            }
+        }
 
         return 1;
     } else {
