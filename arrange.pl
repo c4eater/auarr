@@ -335,10 +335,9 @@ sub fetch_vorbis_tags_fileset {
                         set_vorbis_tag($file, uc($key), $value);
                         $tagset->{uc($key)} = $value;
                     }
-                } else {
-                    if ($opt_no_fix_tags
-                        and (lc($key) ne "totaltracks")
-                        or grep(/tracktotal/i, keys %$tagset)) {
+                } elsif ((lc($key) ne "totaltracks")
+                         and (lc($key) ne "tracktotal")) {
+                    if ($opt_no_fix_tags) {
                         _warn sprintf("    UNNEEDED_TAG               %s=\"%s\" in %s/%s\n",
                                       $key, $tagset->{$key}, rcwd, $file);
                         $has_unneeded_tag = 1;
