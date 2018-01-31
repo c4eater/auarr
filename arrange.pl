@@ -258,7 +258,7 @@ sub fetch_vorbis_tags_fileset {
                        rcwd, $file, join("\n",
                                          map({ sprintf("%s = %s",
                                                        $_, $tagset->{$_}) }
-                                             keys %$tagset)));
+                                             sort keys %$tagset)));
 
         # @significant_tags should be a superset of @required_tags
         my @required_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
@@ -618,6 +618,9 @@ sub apply_fn_to_dir {
     };
 
     closedir $dh;
+
+    @files = sort(@files);
+    @dirs = sort(@dirs);
 
     return &$fn(\@files, \@dirs);
 }
