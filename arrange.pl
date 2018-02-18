@@ -449,7 +449,7 @@ sub fetch_vorbis_tags_fileset {
             }
         } elsif ($tagset->{"TRACKTOTAL"} ne $expected_tracktotal) {
             # Logical conflict; avoid fixing automatically.
-            _warn sprintf("    BAD_TRACKTOTAL             \"%s\" (expected %d) in %s/%s\n",
+            _warn sprintf("    BAD_TRACKTOTAL             %s (expected %d) in %s/%s\n",
                           $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
             $has_bad_tracktotal = 1;
         }
@@ -465,57 +465,10 @@ sub fetch_vorbis_tags_fileset {
 
 
 
-# Check if a directory is a scans directory.
-sub fetch_scans {
-    my ($files, $dirs) = @_;
-
-    return 0 if @$dirs || !@$files;
-
-    foreach (@$files) {
-        return 0 unless /\.jpg$/i || /\.bmp$/i || /\.png$/i || /\.tif$/i;
-    }
-
-    return 1;
-}
-
-
-
-# Collect albums from a directory in a recursive way, copying audio files
-# and CD cover scans from album directories to the output directory.
-#
-# If the function argument is an album directory and the album is successfully
-# fetched and copied, the function returns 1.
-# (This also results in removing the source dir in case --remove-source
-# has been activated.)
-#
-# Otherwise, the function returns 0. This can happen in two cases:
-#   - The directory has no audio files and the function just applied itself
-#     recursively to the subdirectories, hoping to fetch albums there;
-#   - An error occurs, e.g. the directory has mixed contents (audio files
-#     plus non-scans subdirectories).
-sub fetch_albums {
-    my ($files, $dirs) = @_;
-
-    foreach my $i (0..@$dirs-1) {
-        if (apply_fn_to_dir(\&fetch_scans, ${$dirs}[$i])) {
-            my $scans_dir = ${$dirs}[$i];
-            splice(@$dirs, $i, 1);
-            last;
-        }
-    }
-
-    if (@$files and @$dirs) {
-        _error sprintf("MIXED_CONTENTS  %s\n", rcwd);
-        return 0;
-    }
-
-    if (@$dirs) {
-        map({ apply_fn_to_dir(\&fetch_albums, $_) } @$dirs);
-        return 0;
-    }
-
-    return 0 if !@$files;
-
+# Actually process a fileset, fixing the tags and sending the files to
+# the output directory.
+sub fix_tags_and_relocate {
+    my $files = shift;
     my (@mp3, @cue, @flac, @ape, @txt, @graphical);
 
     my %classifier = ( "mp3"  => \@mp3,
@@ -528,6 +481,7 @@ sub fetch_albums {
                        "bmp"  => \@graphical,
                        "png"  => \@graphical,
                        "tif"  => \@graphical);
+
 
     foreach my $file (@$files) {
         (my $ext) = $file =~ /\.([a-z0-9]+)$/i;
@@ -599,6 +553,62 @@ sub fetch_albums {
         _warn sprintf("FAILDETECT      %s\n", rcwd);
         return 1;
     }
+}
+
+
+
+# Check if a directory is a scans directory.
+sub fetch_scans {
+    my ($files, $dirs) = @_;
+
+    return 0 if @$dirs || !@$files;
+
+    foreach (@$files) {
+        return 0 unless /\.jpg$/i || /\.bmp$/i || /\.png$/i || /\.tif$/i;
+    }
+
+    return 1;
+}
+
+
+
+# Collect albums from a directory in a recursive way, copying audio files
+# and CD cover scans from album directories to the output directory.
+#
+# If the function argument is an album directory and the album is successfully
+# fetched and copied, the function returns 1.
+# (This also results in removing the source dir in case --remove-source
+# has been activated.)
+#
+# Otherwise, the function returns 0. This can happen in two cases:
+#   - The directory has no audio files and the function just applied itself
+#     recursively to the subdirectories, hoping to fetch albums there;
+#   - An error occurs, e.g. the directory has mixed contents (audio files
+#     plus non-scans subdirectories).
+sub fetch_albums {
+    my ($files, $dirs) = @_;
+
+    foreach my $i (0..@$dirs-1) {
+        if (apply_fn_to_dir(\&fetch_scans, ${$dirs}[$i])) {
+            my $scans_dir = ${$dirs}[$i];
+            splice(@$dirs, $i, 1);
+            last;
+        }
+    }
+
+    if (@$files and @$dirs) {
+        _error sprintf("MIXED_CONTENTS  %s\n", rcwd);
+        return 0;
+    }
+
+    if (@$dirs) {
+        map({ apply_fn_to_dir(\&fetch_albums, $_) } @$dirs);
+        return 0;
+    }
+
+    return 0 if !@$files;
+
+    return fix_tags_and_relocate($files);
 }
 
 
