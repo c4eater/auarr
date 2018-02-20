@@ -281,7 +281,6 @@ sub fetch_vorbis_tags_fileset {
                                 "TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER");
 
         # Try to guess the value of the DATE tag if --guess-year is active.
-        _debug "WATCH: ", rcwd, "\n";
         if (!grep(/date/i, keys %$tagset) && $opt_guess_year
             && ((my $year) = (basename(rcwd) =~ /^CD/ ?
                               basename(dirname(rcwd)) : basename(rcwd))
@@ -389,10 +388,12 @@ sub fetch_vorbis_tags_fileset {
 
         # Check every $tagset for mismatching tags, except for the first tagset.
         if (@tagsets) {
-            map( { my $value0 = $tagsets[0]->{$_};
-                   my $value = $tagset->{$_};
+            map( { my $value0 = (exists($tagsets[0]->{$_}) ? $tagsets[0]->{$_}
+                                 : "");
+                   my $value = (exists($tagset->{$_}) ? $tagset->{$_}
+                                : "");
 
-                   unless ((!$value0 && !$value) or ($value0 eq $value)) {
+                   unless ($value0 eq $value) {
                        _error sprintf("    TAG_MISMATCH_%-7s    (\"%s\" vs \"%s\") in %s/%s\n",
                                       $_, $value, $value0, rcwd, $file);
                        $has_tag_mismatch = 1;
