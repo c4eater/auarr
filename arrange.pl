@@ -46,7 +46,7 @@ use Data::Dumper;
 
 
 our($opt_help, $opt_verbose, $opt_remove_source, $opt_no_fix_tags,
-    $opt_no_move_to_destdir, $opt_guess_year);
+    $opt_no_output_to_destdir, $opt_guess_year);
 
 
 # Print out the help.
@@ -189,13 +189,13 @@ sub fetch_vorbis_tags_file {
 #
 #     - A presence of an "unneeded" tag.
 #     An unneeded tag is anything that is not a required tag or the TRACKTOTAL
-#     tag or the DISCNUMBER tag or the PERFORMER tag. An example would be a
+#     tag or the DISCNUMBER tag or the PERFORMER tag. An example would be the
 #     COMMENT tag. Normally, no one ever cares of the contents of these tags,
 #     and they are simply polluting the Vorbis data. In case of autocorrection
 #     enabled, these tags are removed.
 #
 #     - A non-uppercased tag name.
-#     The standart requires the tag names to come in uppercase. If
+#     The standard requires the tag names to come in uppercase. If
 #     autocorrection is enabled, the tag name will be converted to uppercase.
 #
 #     - A wrong format of the TRACKNUMBER tag.
@@ -208,7 +208,7 @@ sub fetch_vorbis_tags_file {
 #     In case of autocorrection enabled, TRACKTOTAL is filled automatically.
 #
 #     - TOTALTRACKS tag instead of TRACKTOTAL.
-#     This is simply not standart compliant. Track count should be stored in
+#     This is simply not standard compliant. Track count should be stored in
 #     TRACKTOTAL. If autocorrection is enabled, TOTALTRACKS are renamed to
 #     TRACKTOTAL.
 #
@@ -267,6 +267,7 @@ sub fetch_vorbis_tags_fileset {
                                 "TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER");
 
         # Try to guess the value of the DATE tag if --guess-year is active.
+        _debug "WATCH: ", rcwd, "\n";
         if (!grep(/date/i, keys %$tagset) && $opt_guess_year
             && ((my $year) = (basename(rcwd) =~ /^CD/ ?
                               basename(dirname(rcwd)) : basename(rcwd))
@@ -467,20 +468,21 @@ sub fetch_vorbis_tags_fileset {
 
 # Actually process a fileset, fixing the tags and sending the files to
 # the output directory.
-sub fix_tags_and_relocate {
+sub fix_tags_and_relocate_fileset {
     my $files = shift;
-    my (@mp3, @cue, @flac, @ape, @txt, @graphical);
+    my $scans_dir = shift;
+    my (@mp3, @cue, @flac, @ape, @logs, @scans);
 
     my %classifier = ( "mp3"  => \@mp3,
                        "cue"  => \@cue,
                        "flac" => \@flac,
                        "ape"  => \@ape,
-                       "log"  => \@txt,
-                       "txt"  => \@txt,
-                       "jpg"  => \@graphical,
-                       "bmp"  => \@graphical,
-                       "png"  => \@graphical,
-                       "tif"  => \@graphical);
+                       "log"  => \@logs,
+                       "txt"  => \@logs,
+                       "jpg"  => \@scans,
+                       "bmp"  => \@scans,
+                       "png"  => \@scans,
+                       "tif"  => \@scans);
 
 
     foreach my $file (@$files) {
@@ -517,26 +519,32 @@ sub fix_tags_and_relocate {
 
         my $vorbis_tags = fetch_vorbis_tags_fileset(\@flac);
 
-        if ($vorbis_tags && !$opt_no_move_to_destdir) {
+        if ($vorbis_tags && !$opt_no_output_to_destdir) {
+            my $tagset = @$vorbis_tags[0];
+            my $srcdir = sprintf("%s/%s", $ARGV[0], rcwd);
+            my $destdir = sprintf("%s/%s/%s - %s", $ARGV[1],
+                                  $tagset->{"ARTIST"},
+                                  $tagset->{"DATE"},
+                                  $tagset->{"ALBUM"});
+            my $scans_destdir = sprintf("%s/scans", $destdir);
+            my $logs_destdir = sprintf("%s/logs", $destdir);
+
+            make_path($destdir) if !-d $destdir;
+
+            # move audio files
             foreach my $flac_file (@flac) {
                 my $tagset = fetch_vorbis_tags_file($flac_file);
 
-                my $src = sprintf("%s/%s/%s", $ARGV[0], rcwd, $flac_file);
+                # replace nonprintable chars
+                foreach my $tag ("ARTIST", "ALBUM", "TITLE") {
+                    $tagset->{$tag} =~ s/[\/\\]/_/g;
+                }
 
-                my $destdir = sprintf("%s/%s/%s - %s", $ARGV[1],
-                                      $tagset->{"ARTIST"},
-                                      $tagset->{"DATE"},
-                                      $tagset->{"ALBUM"});
+                my $src = sprintf("%s/%s", $srcdir, $flac_file);
                 my $dest = sprintf("%s/%02s - %s.flac",
                                    $destdir,
                                    $tagset->{"TRACKNUMBER"},
                                    $tagset->{"TITLE"});
-
-                # drop nonprintable
-                $dest =~ s/[\?*:]//g;
-                $dest =~ s/[\\\|]/ /g;
-
-                make_path($destdir) if !-d $destdir;
 
                 if ($opt_remove_source) {
                     move($src, $dest) or die sprintf("move failed: %s -> %s",
@@ -544,6 +552,61 @@ sub fix_tags_and_relocate {
                 } else {
                     copy($src, $dest) or die sprintf("copy failed: %s -> %s",
                                                      $src, $dest);
+                }
+            }
+
+            # move scans
+            if ($scans_dir) {
+                if ($opt_remove_source) {
+                    move("$srcdir/$scans_dir", $scans_destdir)
+                        or die sprintf("move failed: %s -> %s",
+                                       $srcdir/$scans_dir,
+                                       $scans_destdir);
+                } else {
+                    copy("$srcdir/$scans_dir", $scans_destdir)
+                        or die sprintf("copy failed: %s -> %s",
+                                       $srcdir/$scans_dir,
+                                       $scans_destdir);
+                }
+            }
+
+            if (@scans) {
+                make_path($scans_destdir) if !-d $scans_destdir;
+
+                foreach my $scans_file (@scans) {
+                    my $src = sprintf("%s/%s", $srcdir, $scans_file);
+                    my $dest = sprintf("%s/%s", $scans_destdir,
+                                       $scans_file);
+
+                    if ($opt_remove_source) {
+                        move($src, $dest)
+                            or die sprintf("move failed: %s -> %s",
+                                           $src, $dest);
+                    } else {
+                        copy($src, $dest)
+                            or die sprintf("copy failed: %s -> %s",
+                                           $src, $dest);
+                    }
+                }
+            }
+
+            # move logs
+            if (@logs) {
+                make_path($logs_destdir) if !-d $logs_destdir;
+
+                foreach my $log_file (@logs) {
+                    my $src = sprintf("%s/%s", $srcdir, $log_file);
+                    my $dest = sprintf("%s/%s", $logs_destdir, $log_file);
+
+                    if ($opt_remove_source) {
+                        move($src, $dest)
+                            or die sprintf("move failed: %s -> %s",
+                                           $src, $dest);
+                    } else {
+                        copy($src, $dest)
+                            or die sprintf("copy failed: %s -> %s",
+                                           $src, $dest);
+                    }
                 }
             }
         }
@@ -587,10 +650,12 @@ sub fetch_scans {
 #     plus non-scans subdirectories).
 sub fetch_albums {
     my ($files, $dirs) = @_;
+    my $scans_dir = "";
 
+    # find and filter out the scans directory
     foreach my $i (0..@$dirs-1) {
         if (apply_fn_to_dir(\&fetch_scans, ${$dirs}[$i])) {
-            my $scans_dir = ${$dirs}[$i];
+            $scans_dir = ${$dirs}[$i];
             splice(@$dirs, $i, 1);
             last;
         }
@@ -608,7 +673,7 @@ sub fetch_albums {
 
     return 0 if !@$files;
 
-    return fix_tags_and_relocate($files);
+    return fix_tags_and_relocate_fileset($files, $scans_dir);
 }
 
 
@@ -639,20 +704,20 @@ sub apply_fn_to_dir {
 
 # OK, here we start.
 
-GetOptions('help'               => \$opt_help,
-           'verbose'            => \$opt_verbose,
-           'remove-source'      => \$opt_remove_source,
-           'no-fix-tags'        => \$opt_no_fix_tags,
-           'no-move-to-destdir' => \$opt_no_move_to_destdir,
-           'guess-year'         => \$opt_guess_year)
+GetOptions('help'                 => \$opt_help,
+           'verbose'              => \$opt_verbose,
+           'remove-source'        => \$opt_remove_source,
+           'no-fix-tags'          => \$opt_no_fix_tags,
+           'no-output-to-destdir' => \$opt_no_output_to_destdir,
+           'guess-year'           => \$opt_guess_year)
     or die "Wrong command line options specified";
 
 if (defined $opt_no_fix_tags) {
-    $opt_no_move_to_destdir = 1;
+    $opt_no_output_to_destdir = 1;
 }
 
-if ((defined $opt_no_move_to_destdir) && ($#ARGV != 0)
-    || (!defined $opt_no_move_to_destdir) && ($#ARGV != 1)) {
+if ((defined $opt_no_output_to_destdir) && ($#ARGV != 0)
+    || (!defined $opt_no_output_to_destdir) && ($#ARGV != 1)) {
     print "\nWrong number of arguments.\n";
     help;
     exit;
