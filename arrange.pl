@@ -2,7 +2,24 @@
 #
 # Just another Perl script that fixes audio tags and sorts audio files.
 #
-# TODO: Add a normal workflow description.
+# A proposed workflow is:
+#     - Check the GENRE tag of the source files and fix if necessary (suggest
+#       to use a third-party tool).
+#
+#     - Convert file extensions to lowercase. A sample search script:
+#       find . -type f | grep "\.[A-Z][^\.]\+$"
+#
+#     - Run the script in dry-run debug mode (-v --no-fix-tags) and dump the
+#       debug output (tag values) to a logfile. Check the logfile for the
+#       presence of the following non-printable symbols:
+#
+#       [^[:alnum:][:punct:]= -/:]
+#
+#       OK if they are found in insignificant tags, otherwise they should be
+#       reviewed/replaced.
+#
+#     - Actually run the script. Record the log of the script output.
+#
 #
 # A directory is considered a "scans directory" if it meets _all_ of the
 # following criteria:
@@ -24,13 +41,10 @@
 #
 #     - The directory has no files other than the audio files specified above
 #       and, optionally, the following ones:
-#           - text files (txt, log) - will be ignored during export;
-#           - playlists (m3u, wpl, etc) - will be ignored during export;
+#           - text files (txt, log) - will be moved to "logs" directory during
+#             export;
 #           - image files (jpg, bmp etc) - will be considered scans/booklets
-#             and moved to a separate folder (except for "front.jpg" and
-#             "cover.jpg" - these ones will be considered front images and left
-#             in place; will be renamed to cover.jpg for consistency though).
-
+#             and moved to "scans" directory during export.
 use strict;
 use warnings;
 use 5.010;
@@ -178,7 +192,7 @@ sub fetch_vorbis_tags_file {
 #     Without these tags, it is simply dangerous to perform automatic renaming.
 #
 #     - A tag mismatch (different values for the different files) in any of the
-#     following tags: "TITLE" "ARTIST" "ALBUM" "DATE" "GENRE".
+#     following tags: "TITLE" "ARTIST" "ALBUM" "DATE" "GENRE" "DISCNUMBER".
 #
 #     - A missing track (TRACKNUMBERs not forming a continuous sequence).
 #
@@ -384,7 +398,8 @@ sub fetch_vorbis_tags_fileset {
                        $has_tag_mismatch = 1;
                    }
                  }
-                 ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE" ));
+                 ("ARTIST", "ALBUM", "DATE", "TRACKTOTAL", "GENRE",
+                  "DISCNUMBER" ));
         }
 
         if ($has_missing_tag || $has_tag_mismatch) {
@@ -526,6 +541,12 @@ sub fix_tags_and_relocate_fileset {
                                   $tagset->{"ARTIST"},
                                   $tagset->{"DATE"},
                                   $tagset->{"ALBUM"});
+
+            if ($tagset->{"DISCNUMBER"}) {
+                $destdir = sprintf("%s/CD%s", $destdir,
+                                   $tagset->{"DISCNUMBER"});
+            }
+
             my $scans_destdir = sprintf("%s/scans", $destdir);
             my $logs_destdir = sprintf("%s/logs", $destdir);
 
@@ -557,16 +578,17 @@ sub fix_tags_and_relocate_fileset {
 
             # move scans
             if ($scans_dir) {
+                my $src = sprintf("%s/%s", $srcdir, $scans_dir);
+                my $dest = $scans_destdir;
+
                 if ($opt_remove_source) {
-                    move("$srcdir/$scans_dir", $scans_destdir)
+                    move($src, $dest)
                         or die sprintf("move failed: %s -> %s",
-                                       $srcdir/$scans_dir,
-                                       $scans_destdir);
+                                       $src, $dest);
                 } else {
-                    copy("$srcdir/$scans_dir", $scans_destdir)
+                    copy($src, $dest)
                         or die sprintf("copy failed: %s -> %s",
-                                       $srcdir/$scans_dir,
-                                       $scans_destdir);
+                                       $src, $dest);
                 }
             }
 
@@ -575,8 +597,7 @@ sub fix_tags_and_relocate_fileset {
 
                 foreach my $scans_file (@scans) {
                     my $src = sprintf("%s/%s", $srcdir, $scans_file);
-                    my $dest = sprintf("%s/%s", $scans_destdir,
-                                       $scans_file);
+                    my $dest = sprintf("%s/%s", $scans_destdir, $scans_file);
 
                     if ($opt_remove_source) {
                         move($src, $dest)
