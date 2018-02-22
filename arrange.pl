@@ -168,7 +168,7 @@ sub fetch_vorbis_tags_file {
 
     while (<$command_ostream>) {
         chomp;
-        (my $key, my $value) = $_ =~ /comment\[[[:alnum:]]+\]: (.*)=(.*)/;
+        (my $key, my $value) = $_ =~ /comment\[[[:alnum:]]+\]: ([^=]+)=(.*)/;
         $vorbis_tags{$key} = $value if $key;
     }
 
@@ -543,7 +543,7 @@ sub fix_tags_and_relocate_fileset {
                                   $tagset->{"DATE"},
                                   $tagset->{"ALBUM"});
 
-            if ($tagset->{"DISCNUMBER"}) {
+            if (exists($tagset->{"DISCNUMBER"})) {
                 $destdir = sprintf("%s/CD%s", $destdir,
                                    $tagset->{"DISCNUMBER"});
             }
