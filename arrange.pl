@@ -522,13 +522,13 @@ sub fix_tags_and_relocate_fileset {
     }
 
     if (@mp3 && !@cue && !@flac && !@ape) {
-        _warn sprintf("MP3             %s\n", rcwd);
+        _error sprintf("MP3             %s\n", rcwd);
         return 1;
     } elsif (!@mp3 && @flac==1 && @cue==1 && !@ape) {
-        _warn sprintf("FLAC+CUE        %s\n", rcwd);
+        _error sprintf("FLAC+CUE        %s\n", rcwd);
         return 1;
     } elsif (!@mp3 && @ape==1 && @cue==1 && !@flac) {
-        _warn sprintf("APE+CUE         %s\n", rcwd);
+        _error sprintf("APE+CUE         %s\n", rcwd);
         return 1;
     } elsif (!@mp3 && (@flac>1) && !@ape) {
         printf("FLAC            %s\n", rcwd);
@@ -635,7 +635,7 @@ sub fix_tags_and_relocate_fileset {
 
         return 1;
     } else {
-        _warn sprintf("FAILDETECT      %s\n", rcwd);
+        _error sprintf("FAILDETECT      %s\n", rcwd);
         return 1;
     }
 }
