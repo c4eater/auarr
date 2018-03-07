@@ -13,7 +13,7 @@
 #       debug output (tag values) to a logfile. Check the logfile for the
 #       presence of the following non-printable symbols:
 #
-#       [^[:alnum:][:punct:]= -/:]
+#       [^[:alnum:][:punct:]= -/:`]
 #
 #       OK if they are found in insignificant tags, otherwise they should be
 #       reviewed/replaced.
@@ -54,6 +54,7 @@ use File::Copy;
 use File::Path qw(make_path);
 use File::Basename qw(basename dirname);
 use File::Spec qw(abs2rel);
+use POSIX qw(strtol);
 use Getopt::Long;
 use Term::ANSIColor;
 use Data::Dumper;
@@ -77,7 +78,7 @@ sub help {
     print "\t", colored(['bold'], "-r, --remove-source\n"),
           "\t\tRemove source directories in case of successful processing.\n";
     print "\n";
-    print "\t", colored(['bold'], "--no-move-to-destdir\n"),
+    print "\t", colored(['bold'], "--no-output-to-destdir\n"),
           "\t\tOnly fix tags, do not copy/move anything to the destination directory.\n";
     print "\n";
     print "\t", colored(['bold'], "--no-fix-tags\n"),
@@ -196,6 +197,8 @@ sub fetch_vorbis_tags_file {
 #
 #     - A missing track (TRACKNUMBERs not forming a continuous sequence).
 #
+#     - A conflict between non-empty TRACKTOTAL and an actual # of tracks.
+#
 # If a critical tag error is encountered, issue an error message and return 0.
 #
 #
@@ -238,6 +241,7 @@ sub fetch_vorbis_tags_fileset {
     my $has_missing_tag = 0;
     my $has_tag_mismatch = 0;
     my $has_missing_track = 0;
+    my $has_tracktotal_conflict = 0;
     my $has_critical_error = 0; # any of the above (a fileset-wide flag)
 
     # shallow errors (can be fixed automatically)
@@ -465,14 +469,33 @@ sub fetch_vorbis_tags_fileset {
                 $tagset->{"TRACKTOTAL"} = $expected_tracktotal;
             }
         } elsif ($tagset->{"TRACKTOTAL"} ne $expected_tracktotal) {
-            # Logical conflict; avoid fixing automatically.
-            _warn sprintf("    BAD_TRACKTOTAL             %s (expected %d) in %s/%s\n",
-                          $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
-            $has_bad_tracktotal = 1;
+            my $normalized_tracktotal = strtol($tagset->{"TRACKTOTAL"}, 10);
+
+            if ($normalized_tracktotal == $expected_tracktotal) {
+                # TRACKTOTAL string-to-int cast yields a correct result.
+                # Thus, TRACKTOTAL value is ok, just the markup is wrong
+                # (eg leading 0). This can be fixed automatically.
+                if ($opt_no_fix_tags) {
+                    _warn sprintf("    BAD_TRACKTOTAL             %s (expected %d) in %s/%s\n",
+                                  $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
+                    $has_bad_tracktotal = 1;
+                } else {
+                    _warn sprintf("    FIX_BAD_TRACKTOTAL             %s -> %d in %s/%s\n",
+                                  $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
+                    set_vorbis_tag($file, "TRACKTOTAL", $expected_tracktotal);
+                    $tagset->{"TRACKTOTAL"} = $expected_tracktotal;
+                }
+            } else {
+                # Logical conflict.
+                _error sprintf("    CONFLICT_TRACKTOTAL             %s (expected %d) in %s/%s\n",
+                               $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
+                $has_tracktotal_conflict = 1;
+            }
         }
     }
 
     $has_critical_error &= $has_missing_track;
+    $has_critical_error &= $has_tracktotal_conflict;
     $has_shallow_error &= $has_bad_tracktotal;
 
     return 0 if $has_critical_error or $has_shallow_error;
@@ -487,6 +510,7 @@ sub fetch_vorbis_tags_fileset {
 sub fix_tags_and_relocate_fileset {
     my $files = shift;
     my $scans_dir = shift;
+    my $logs_dir = shift;
     my (@mp3, @cue, @flac, @ape, @logs, @scans);
 
     my %classifier = ( "mp3"  => \@mp3,
@@ -531,7 +555,7 @@ sub fix_tags_and_relocate_fileset {
         _error sprintf("APE+CUE         %s\n", rcwd);
         return 1;
     } elsif (!@mp3 && (@flac>1) && !@ape) {
-        printf("FLAC            %s\n", rcwd);
+        _debug("FLAC            %s\n", rcwd);
 
         my $vorbis_tags = fetch_vorbis_tags_fileset(\@flac);
 
@@ -613,6 +637,21 @@ sub fix_tags_and_relocate_fileset {
             }
 
             # move logs
+            if ($logs_dir) {
+                my $src = sprintf("%s/%s", $srcdir, $logs_dir);
+                my $dest = $logs_destdir;
+
+                if ($opt_remove_source) {
+                    move($src, $dest)
+                        or die sprintf("move failed: %s -> %s",
+                                       $src, $dest);
+                } else {
+                    copy($src, $dest)
+                        or die sprintf("copy failed: %s -> %s",
+                                       $src, $dest);
+                }
+            }
+
             if (@logs) {
                 make_path($logs_destdir) if !-d $logs_destdir;
 
@@ -657,6 +696,21 @@ sub fetch_scans {
 
 
 
+# Check if a directory is a logs directory.
+sub fetch_logs {
+    my ($files, $dirs) = @_;
+
+    return 0 if @$dirs || !@$files;
+
+    foreach (@$files) {
+        return 0 unless /\.txt$/i || /\.log$/i;
+    }
+
+    return 1;
+}
+
+
+
 # Collect albums from a directory in a recursive way, copying audio files
 # and CD cover scans from album directories to the output directory.
 #
@@ -673,6 +727,7 @@ sub fetch_scans {
 sub fetch_albums {
     my ($files, $dirs) = @_;
     my $scans_dir = "";
+    my $logs_dir = "";
 
     # find and filter out the scans directory
     foreach my $i (0..@$dirs-1) {
@@ -683,10 +738,19 @@ sub fetch_albums {
         }
     }
 
-    if (@$files and @$dirs) {
-        _error sprintf("MIXED_CONTENTS  %s\n", rcwd);
-        return 0;
+    # find and filter out the logs directory
+    foreach my $i (0..@$dirs-1) {
+        if (apply_fn_to_dir(\&fetch_logs, ${$dirs}[$i])) {
+            $logs_dir = ${$dirs}[$i];
+            splice(@$dirs, $i, 1);
+            last;
+        }
     }
+
+    # if (@$files and @$dirs) {
+    #     _error sprintf("MIXED_CONTENTS  %s\n", rcwd);
+    #     return 0;
+    # }
 
     if (@$dirs) {
         map({ apply_fn_to_dir(\&fetch_albums, $_) } @$dirs);
@@ -695,7 +759,7 @@ sub fetch_albums {
 
     return 0 if !@$files;
 
-    return fix_tags_and_relocate_fileset($files, $scans_dir);
+    return fix_tags_and_relocate_fileset($files, $scans_dir, $logs_dir);
 }
 
 
