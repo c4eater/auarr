@@ -115,7 +115,8 @@ sub _debug {
 
     my $msg = shift or return;
 
-    print STDOUT sprintf("\n==== DEBUG ====\n%s\n===============\n", $msg);
+    print STDOUT sprintf("\n==== DEBUG ====\n%s\n===============\n",
+                         sprintf($msg, @_));
 }
 
 
@@ -427,31 +428,6 @@ sub fetch_vorbis_tags_fileset {
 
     # Check if there are missing tracks.
     my $expected_tracktotal = @tagsets;
-
-    unless (!@tagsets or $has_wrong_tracknumber_format) {
-        my @tracknumbers = sort({$a <=> $b} map({ $_->{"TRACKNUMBER"}} @tagsets));
-        $expected_tracktotal = $tracknumbers[-1] if @tagsets <= $tracknumbers[-1];
-        my @expected_tracknumbers = (1 .. $expected_tracktotal);
-        my @missing_tracknumbers = ();
-
-        foreach my $n (@tracknumbers) {
-            my $expected_tracknumber = shift @expected_tracknumbers;
-            next if $n == $expected_tracknumber;
-            push(@missing_tracknumbers, $expected_tracknumber);
-
-            while (@expected_tracknumbers) {
-                $expected_tracknumber = shift @expected_tracknumbers;
-                last if $n == $expected_tracknumber;
-                push(@missing_tracknumbers, $expected_tracknumber);
-            }
-        }
-
-        if (@missing_tracknumbers) {
-            _error sprintf("    MISSING_TRACK             %s in %s\n",
-                           join(",", @missing_tracknumbers), rcwd);
-            $has_missing_track = 1;
-        }
-    }
 
     # Check all tagsets for a wrong TRACKTOTAL value.
     foreach my $file (@{$files}) {
