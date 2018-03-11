@@ -18,6 +18,10 @@
 #       OK if they are found in insignificant tags, otherwise they should be
 #       reviewed/replaced.
 #
+#     - For bands performing in English, check the track names for the presence
+#       of non-ASCII symbols (like e.g. Cyrillic [А-Яа-я]) - this allows early
+#       detection of encoding problems.
+#
 #     - Actually run the script. Record the log of the script output.
 #
 #
@@ -283,7 +287,8 @@ sub fetch_vorbis_tags_fileset {
         my @required_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
                              "TRACKNUMBER");
         my @significant_tags = ("TITLE", "ARTIST", "ALBUM", "DATE", "GENRE",
-                                "TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER");
+                                "TRACKNUMBER", "TRACKTOTAL", "DISCNUMBER",
+                                "COMPOSER");
 
         # Try to guess the value of the DATE tag if --guess-year is active.
         if (!grep(/date/i, keys %$tagset) && $opt_guess_year
@@ -456,14 +461,14 @@ sub fetch_vorbis_tags_fileset {
                                   $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
                     $has_bad_tracktotal = 1;
                 } else {
-                    _warn sprintf("    FIX_BAD_TRACKTOTAL             %s -> %d in %s/%s\n",
+                    _warn sprintf("    FIX_BAD_TRACKTOTAL         %s -> %d in %s/%s\n",
                                   $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
                     set_vorbis_tag($file, "TRACKTOTAL", $expected_tracktotal);
                     $tagset->{"TRACKTOTAL"} = $expected_tracktotal;
                 }
             } else {
                 # Logical conflict.
-                _error sprintf("    CONFLICT_TRACKTOTAL             %s (expected %d) in %s/%s\n",
+                _error sprintf(   "CONFLICT_TRACKTOTAL        %s (expected %d) in %s/%s\n",
                                $tagset->{"TRACKTOTAL"}, $expected_tracktotal, rcwd, $file);
                 $has_tracktotal_conflict = 1;
             }
