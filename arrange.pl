@@ -138,10 +138,11 @@ sub set_vorbis_tag {
     my $file = shift or die "Error: \"file\" argument not specified";
 
     $file = $ARGV[0] . "/" . rcwd . "/" . $file;
-    
+
     my $tag = shift or die "Error: \"tag\" argument not specified";
     my $value = shift or die "Error: \"value\" argument not specified";
 
+    system("metaflac", qq{--remove-tag=$tag}, $file);
     system("metaflac", qq{--set-tag=$tag=$value}, $file);
 }
 
@@ -152,7 +153,7 @@ sub delete_vorbis_tag {
     my $file = shift or die "Error: \"file\" argument not specified";
 
     $file = $ARGV[0] . "/" . rcwd . "/" . $file;
-    
+
     my $tag = shift or die "Error: \"tag\" argument not specified";
 
     system("metaflac", qq{--remove-tag=$tag}, $file);
@@ -389,7 +390,6 @@ sub fetch_vorbis_tags_fileset {
                 _warn sprintf("    FIX_BAD_TRACKNUMBER_FORMAT %s in %s/%s\n",
                               $tagset->{"TRACKNUMBER"}, rcwd, $file);
                 $tagset->{"TRACKNUMBER"} =~ s/^0//;
-                delete_vorbis_tag($file, "TRACKNUMBER");
                 set_vorbis_tag($file, "TRACKNUMBER", $tagset->{"TRACKNUMBER"});
             }
         }
