@@ -21,8 +21,6 @@ Planned support: FLAC+CUE, APE+tracks, APE+CUE, MP3.
 
 - Not able to handle some complicated layouts (eg. directories containing a mix of audio files and nested directories). Remember, the script is intended to use on albums, not on individual tracks, and it ignores anything that does not look like an album. If you have some individual audio files which do not form an album, please sort them manually instead of using this script.
 
-- Not able to read ID3 tags from files containing ` and " in filenames.
-
 - ONLY for Ext filesystems! This is because some non-portable symbols are allowed in the output filenames (most notable are \ : ?). I will probably make the script replace the non-portable symbols with _ in future, but for now I just don't care about FS compatibility.
 
 

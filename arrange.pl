@@ -142,7 +142,7 @@ sub set_vorbis_tag {
     my $tag = shift or die "Error: \"tag\" argument not specified";
     my $value = shift or die "Error: \"value\" argument not specified";
 
-    qx(metaflac --set-tag=\"$tag=$value\" \"$file\");
+    system("metaflac", qq{--set-tag=$tag=$value}, $file);
 }
 
 
@@ -155,7 +155,7 @@ sub delete_vorbis_tag {
     
     my $tag = shift or die "Error: \"tag\" argument not specified";
 
-    qx(metaflac --remove-tag=\"$tag\" \"$file\");
+    system("metaflac", qq{--remove-tag=$tag}, $file);
 }
 
 
@@ -164,11 +164,9 @@ sub delete_vorbis_tag {
 # If there is an error fetching these tags, return 0.
 sub fetch_vorbis_tags_file {
     my $file = shift or die "Error: \"file\" argument not specified";
-    my $command = `metaflac --list --block-type=VORBIS_COMMENT \"$file\"`;
 
-    return 0 if $?;
-
-    open(my $command_ostream, '<', \$command);
+    open(my $command_ostream, '-|', "metaflac", "--list",
+         "--block-type=VORBIS_COMMENT", $file) or return 0;
 
     my %vorbis_tags = ();
 
